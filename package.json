@@ -1,0 +1,32 @@
+{
+  "name": "browser-tools-mcp-workspace",
+  "private": true,
+  "type": "module",
+  "description": "Workspace root for BrowserTools MCP",
+  "engines": {
+    "node": ">=22.19"
+  },
+  "workspaces": [
+    "browser-tools-mcp",
+    "browser-tools-server"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "tsc -p browser-tools-mcp/tsconfig.json --noEmit",
+    "test": "vitest run --project unit --project integration",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:e2e": "vitest run --project e2e",
+    "test:all": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/supertest": "^6.0.2",
+    "@types/ws": "^8.5.14",
+    "playwright": "^1.50.0",
+    "supertest": "^7.0.0",
+    "typescript": "5.9.3",
+    "vitest": "^3.0.0"
+  }
+}

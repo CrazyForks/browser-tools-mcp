@@ -1,216 +1,213 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
-<head>
+  <head>
+    <meta charset="utf-8" />
+    <title>BrowserTools MCP</title>
     <style>
-        body {
-            padding: 16px;
-            font-family: system-ui, -apple-system, sans-serif;
-            background-color: #282828;
-            color: #fff;
+      :root {
+        color-scheme: light dark;
+        --fg: #1f2328;
+        --muted: #59636e;
+        --border: #d8dee4;
+        --bg: #ffffff;
+        --accent: #0969da;
+        --ok: #1a7f37;
+        --warn: #9a6700;
+        --bad: #cf222e;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e6edf3;
+          --muted: #9198a1;
+          --border: #3d444d;
+          --bg: #0d1117;
+          --accent: #4493f8;
+          --ok: #3fb950;
+          --warn: #d29922;
+          --bad: #f85149;
         }
-        .endpoint-list {
-            margin: 16px 0;
-        }
-        .endpoint-item {
-            display: flex;
-            gap: 8px;
-            margin-bottom: 8px;
-            align-items: center;
-        }
-        .endpoint-form {
-            display: flex;
-            gap: 8px;
-            margin-bottom: 16px;
-            align-items: center;
-        }
-        button {
-            padding: 4px 8px;
-        }
-        input {
-            padding: 4px;
-        }
-        .status-indicator {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            display: inline-block;
-        }
-        .status-connected {
-            background: #4caf50;
-        }
-        .status-disconnected {
-            background: #f44336;
-        }
-        .form-group {
-            margin-bottom: 16px;
-        }
-        .form-group label {
-            display: block;
-            margin-bottom: 4px;
-        }
-        .checkbox-group {
-            margin-bottom: 8px;
-        }
-        .checkbox-group-2 {
-            margin-bottom: 6px;
-        }
-        input[type="number"],
-        input[type="text"] {
-            padding: 4px;
-            width: 200px;
-        }
-        .settings-section {
-            border: 1px solid #ccc;
-            padding: 16px;
-            margin-bottom: 16px;
-            border-radius: 4px;
-        }
-        .settings-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            cursor: pointer;
-            user-select: none;
-        }
-        .settings-header h3 {
-            margin: 0;
-        }
-        .settings-content {
-            display: none;
-            margin-top: 16px;
-        }
-        .settings-content.visible {
-            display: block;
-        }
-        .chevron {
-            width: 20px;
-            height: 20px;
-            transition: transform 0.3s ease;
-        }
-        .chevron.open {
-            transform: rotate(180deg);
-        }
-        .quick-actions {
-            display: flex;
-            gap: 8px;
-            margin-bottom: 16px;
-        }
-        .action-button {
-            background-color: #4a4a4a;
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 4px;
-            cursor: pointer;
-            transition: background-color 0.2s;
-        }
-        .action-button:hover {
-            background-color: #5a5a5a;
-        }
-        .action-button.danger {
-            background-color: #f44336;
-        }
-        .action-button.danger:hover {
-            background-color: #d32f2f;
-        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 16px;
+        font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        color: var(--fg);
+        background: var(--bg);
+      }
+      h1 {
+        font-size: 15px;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        margin: 20px 0 8px;
+      }
+      p {
+        margin: 0 0 12px;
+        color: var(--muted);
+      }
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        margin-bottom: 4px;
+      }
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--muted);
+        flex: none;
+      }
+      .dot.connected {
+        background: var(--ok);
+      }
+      .dot.connecting {
+        background: var(--warn);
+      }
+      .dot.disconnected {
+        background: var(--bad);
+      }
+      .detail {
+        color: var(--muted);
+        font-size: 12px;
+        margin: 8px 0 0;
+        white-space: pre-wrap;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 8px;
+        flex-wrap: wrap;
+      }
+      label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .field span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      input[type="text"],
+      input[type="number"],
+      select {
+        padding: 5px 8px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--bg);
+        color: var(--fg);
+        font: inherit;
+        min-width: 0;
+      }
+      input[type="text"],
+      input[type="number"] {
+        width: 130px;
+      }
+      button {
+        padding: 6px 12px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--bg);
+        color: var(--fg);
+        font: inherit;
+        cursor: pointer;
+      }
+      button:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: color-mix(in srgb, var(--fg) 8%, transparent);
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 10px;
+      }
+      .note {
+        border-left: 3px solid var(--border);
+        padding-left: 10px;
+        color: var(--muted);
+        font-size: 12px;
+      }
     </style>
-</head>
-<body>
-    <div class="settings-section">
-        <h3>Quick Actions</h3>
-        <div class="quick-actions">
-            <button id="capture-screenshot" class="action-button">
-                Capture Screenshot
-            </button>
-            <button id="wipe-logs" class="action-button danger">
-                Wipe All Logs
-            </button>
-        </div>
-        <div class="checkbox-group-2" style="margin-top: 10px; display: flex; align-items: center;">
-            <label>
-                <input type="checkbox" id="allow-auto-paste">
-                Allow Auto-paste to Cursor
-            </label>
-        </div>
+  </head>
+  <body>
+    <h1>BrowserTools MCP</h1>
+    <p>Streams this tab's console, network activity and screenshots to your local MCP server.</p>
+
+    <div class="status">
+      <span class="dot" id="dot"></span>
+      <strong id="state">Starting…</strong>
+      <span id="server" class="detail" style="margin: 0"></span>
+    </div>
+    <p class="detail" id="detail"></p>
+
+    <div class="row">
+      <button id="reconnect">Reconnect</button>
+      <button id="cookies">Enable cookie access</button>
     </div>
 
-    <div class="settings-section">
-        <h3>Screenshot Settings</h3>
-        <div class="form-group">
-            <label for="screenshot-path">Provide a directory to save screenshots to (by default screenshots will be saved to your downloads folder if no path is provided)</label>
-            <input type="text" id="screenshot-path" placeholder="/path/to/screenshots">
-        </div>
+    <h2>Connection</h2>
+    <div class="row">
+      <label class="field"><span>Host</span><input type="text" id="host" /></label>
+      <label class="field"><span>Port</span><input type="number" id="port" /></label>
+      <button id="save">Save</button>
+    </div>
+    <p class="note">
+      Loopback addresses only. The extension will not send captured data to any other host.
+    </p>
+
+    <h2>Capture</h2>
+    <div class="row">
+      <label class="field">
+        <span>Console capture</span>
+        <select id="captureMode">
+          <option value="debugger">DevTools protocol (richer, shows a debug banner)</option>
+          <option value="inject">Wrap page console (no banner, works in Firefox)</option>
+        </select>
+      </label>
+    </div>
+    <div class="grid">
+      <label><input type="checkbox" id="captureConsole" /> Capture console</label>
+      <label><input type="checkbox" id="captureNetwork" /> Capture network</label>
+      <label><input type="checkbox" id="captureResponseBodies" /> Capture response bodies</label>
+      <label><input type="checkbox" id="showRequestHeaders" /> Send request headers</label>
+      <label><input type="checkbox" id="showResponseHeaders" /> Send response headers</label>
     </div>
 
-    <div class="settings-section">
-        <h3>Server Connection Settings</h3>
-        <div class="form-group">
-            <label for="server-host">Server Host</label>
-            <input type="text" id="server-host" placeholder="localhost or IP address">
-        </div>
-        <div class="form-group">
-            <label for="server-port">Server Port</label>
-            <input type="number" id="server-port" min="1" max="65535" value="3025">
-        </div>
-        <div class="quick-actions">
-            <button id="discover-server" class="action-button">
-                Auto-Discover Server
-            </button>
-            <button id="test-connection" class="action-button">
-                Test Connection
-            </button>
-        </div>
-        <div id="connection-status" style="margin-top: 8px; display: none;">
-            <span id="status-icon" class="status-indicator"></span>
-            <span id="status-text"></span>
-        </div>
+    <h2>Limits</h2>
+    <div class="grid">
+      <label class="field"><span>Entries kept</span><input type="number" id="logLimit" /></label>
+      <label class="field"><span>Response budget</span><input type="number" id="queryLimit" /></label>
+      <label class="field"><span>Max string length</span><input type="number" id="stringSizeLimit" /></label>
     </div>
 
-    <div class="settings-section">
-        <div class="settings-header" id="advanced-settings-header">
-            <h3>Advanced Settings</h3>
-            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-        </div>
-        
-        <div class="settings-content" id="advanced-settings-content">
-            <div class="form-group">
-                <label for="log-limit">Log Limit (number of logs)</label>
-                <input type="number" id="log-limit" min="1" value="50">
-            </div>
+    <p class="note" style="margin-top: 20px">
+      Values that look like credentials are replaced with <code>[REDACTED]</code> before they leave
+      the browser. Headers are only sent when the boxes above are ticked.
+    </p>
 
-            <div class="form-group">
-                <label for="query-limit">Query Limit (characters)</label>
-                <input type="number" id="query-limit" min="1" value="30000">
-            </div>
-
-            <div class="form-group">
-                <label for="string-size-limit">String Size Limit (characters)</label>
-                <input type="number" id="string-size-limit" min="1" value="500">
-            </div>
-
-            <div class="form-group">
-                <label for="max-log-size">Max Log Size (characters)</label>
-                <input type="number" id="max-log-size" min="1000" value="20000">
-            </div>
-
-            <div class="checkbox-group">
-                <label>
-                    <input type="checkbox" id="show-request-headers">
-                    Include Request Headers
-                </label>
-            </div>
-
-            <div class="checkbox-group">
-                <label>
-                    <input type="checkbox" id="show-response-headers">
-                    Include Response Headers
-                </label>
-            </div>
-        </div>
-    </div>
-
+    <script src="shared.js"></script>
     <script src="panel.js"></script>
-</body>
-</html> 
+  </body>
+</html>
