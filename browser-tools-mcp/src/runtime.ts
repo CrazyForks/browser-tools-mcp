@@ -19,7 +19,13 @@ export interface Runtime {
   close(): Promise<void>;
 }
 
-/** Every call fails with the same explanation when the connector is unavailable. */
+/**
+ * Every call fails with the same explanation when the connector is unavailable.
+ *
+ * These reject rather than throwing synchronously: the interface declares
+ * promises, and a caller attaching `.catch()` instead of using `await` would
+ * otherwise get an uncaught exception.
+ */
 class UnavailableConnectorClient implements ConnectorClient {
   #reason: string;
 
@@ -27,42 +33,44 @@ class UnavailableConnectorClient implements ConnectorClient {
     this.#reason = reason;
   }
 
-  #fail(): never {
-    throw new Error(
-      `The browser connector is not available: ${this.#reason}. ` +
-        `Check that nothing else is using the port, then restart your MCP client.`
+  #fail<T>(): Promise<T> {
+    return Promise.reject(
+      new Error(
+        `The browser connector is not available: ${this.#reason}. ` +
+          `Check that nothing else is using the port, then restart your MCP client.`
+      )
     );
   }
 
-  console(): never {
-    this.#fail();
+  console(): Promise<never> {
+    return this.#fail();
   }
-  network(): never {
-    this.#fail();
+  network(): Promise<never> {
+    return this.#fail();
   }
-  selectedElement(): never {
-    this.#fail();
+  selectedElement(): Promise<never> {
+    return this.#fail();
   }
-  page(): never {
-    this.#fail();
+  page(): Promise<never> {
+    return this.#fail();
   }
-  status(): never {
-    this.#fail();
+  status(): Promise<never> {
+    return this.#fail();
   }
-  wipe(): never {
-    this.#fail();
+  wipe(): Promise<never> {
+    return this.#fail();
   }
-  screenshot(): never {
-    this.#fail();
+  screenshot(): Promise<never> {
+    return this.#fail();
   }
-  refresh(): never {
-    this.#fail();
+  refresh(): Promise<never> {
+    return this.#fail();
   }
-  storage(): never {
-    this.#fail();
+  storage(): Promise<never> {
+    return this.#fail();
   }
-  audit(): never {
-    this.#fail();
+  audit(): Promise<never> {
+    return this.#fail();
   }
 }
 

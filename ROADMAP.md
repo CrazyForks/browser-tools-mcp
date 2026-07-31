@@ -6,9 +6,19 @@ _Audit date: 2026-07-30. Based on a full review of all 21 open PRs, 8 open issue
 
 ## Status: implemented on branch `revival/v2`
 
-Everything in P0-P4 below is built and tested. 193 tests pass — unit,
-integration, and an end-to-end suite that loads the real extension into a real
-Chromium. `npm audit` reports zero vulnerabilities, down from 22.
+Everything in P0-P4 below is built and tested. 235 tests pass and `npm audit`
+reports zero vulnerabilities, down from 22.
+
+Test coverage spans: pure units; the connector's HTTP and WebSocket surface
+including security regressions; MCP protocol conformance and stdout purity
+against the built binary; the shared-connector attach path over real HTTP; real
+Lighthouse audits against a real page; the injected console-capture mode; a real
+Chromium with the real extension loaded; and the full
+MCP client -> server -> connector -> extension -> page chain.
+
+Still unverified by automation, and worth a manual pass: the DevTools panel UI,
+the extension running under Firefox, Windows and WSL, and installation via
+`npx` from a published tarball.
 
 See [CHANGELOG.md](CHANGELOG.md) for what shipped, [MIGRATION.md](MIGRATION.md)
 for the upgrade path, [SECURITY.md](SECURITY.md) for the vulnerability writeups,

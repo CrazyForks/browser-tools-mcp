@@ -71,8 +71,12 @@ for the vulnerabilities this release fixes.
   `auditMode`, `nextjsSeoAudit`.
 - A console capture mode that wraps the page's console instead of attaching the
   debugger — no "started debugging" banner, and it works in Firefox. (#115)
-- 193 tests: unit, integration, and an end-to-end suite that loads the real
-  extension into a real Chromium and asserts the whole capture path.
+- 235 tests: unit, integration, and end-to-end suites that load the real
+  extension into a real Chromium and assert the whole capture path, drive the
+  full MCP client -> server -> connector -> extension -> page chain, run real
+  Lighthouse audits, exercise the shared-connector attach path over HTTP, and
+  cover the injected console-capture mode used where chrome.debugger is
+  unavailable.
 - `engines: node >=22.19`, so an unsupported runtime fails at install with a
   clear message. (#18, #2, #15)
 

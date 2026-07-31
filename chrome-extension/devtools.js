@@ -354,62 +354,6 @@
 
   // --- console capture by wrapping the page's console ---------------------
 
-  const INJECT_BOOTSTRAP = `
-    (function () {
-      if (window.__btmcpInstalled) return true;
-      window.__btmcpInstalled = true;
-      window.__btmcpBuffer = [];
-      var levels = ["log", "info", "warn", "error", "debug"];
-      levels.forEach(function (level) {
-        var original = console[level];
-        console[level] = function () {
-          try {
-            var parts = Array.prototype.map.call(arguments, function (arg) {
-              if (typeof arg === "string") return arg;
-              try { return JSON.stringify(arg); } catch (e) { return String(arg); }
-            });
-            if (window.__btmcpBuffer.length < 500) {
-              window.__btmcpBuffer.push({
-                level: level,
-                message: parts.join(" "),
-                timestamp: Date.now()
-              });
-            }
-          } catch (e) { /* never break the page */ }
-          return original.apply(console, arguments);
-        };
-      });
-      window.addEventListener("error", function (event) {
-        if (window.__btmcpBuffer.length < 500) {
-          window.__btmcpBuffer.push({
-            level: "error",
-            message: String(event.message) + " (" + event.filename + ":" + event.lineno + ")",
-            timestamp: Date.now()
-          });
-        }
-      });
-      window.addEventListener("unhandledrejection", function (event) {
-        if (window.__btmcpBuffer.length < 500) {
-          window.__btmcpBuffer.push({
-            level: "error",
-            message: "Unhandled promise rejection: " + String(event.reason),
-            timestamp: Date.now()
-          });
-        }
-      });
-      return true;
-    })()
-  `;
-
-  const INJECT_DRAIN = `
-    (function () {
-      if (!window.__btmcpBuffer) return [];
-      var out = window.__btmcpBuffer;
-      window.__btmcpBuffer = [];
-      return out;
-    })()
-  `;
-
   function startInjectedCapture() {
     if (injectPollTimer) return;
     api.devtools.inspectedWindow.eval(INJECT_BOOTSTRAP);
