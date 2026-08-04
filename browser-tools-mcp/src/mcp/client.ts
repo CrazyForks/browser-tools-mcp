@@ -1,4 +1,10 @@
-import type { Connector, TabScopedResult, TabView } from "../connector/connector.js";
+import type {
+  Artifact,
+  Connector,
+  ExportResult,
+  TabScopedResult,
+  TabView,
+} from "../connector/connector.js";
 import type {
   ConsoleEntry,
   ConsoleQuery,
@@ -67,6 +73,9 @@ export interface ConnectorClient {
     category: AuditCategory,
     options?: { url?: string; tabId?: TabId }
   ): Promise<AuditReport>;
+  exportConsole(options?: { tabId?: TabId; allTabs?: boolean }): Promise<ExportResult<ConsoleEntry>>;
+  exportNetwork(options?: { tabId?: TabId; allTabs?: boolean }): Promise<ExportResult<NetworkEntry>>;
+  readArtifact(kind: "screenshot" | "audit", name: string): Promise<Artifact>;
 }
 
 /** Talks straight to an embedded connector — no network hop, no discovery. */
@@ -150,6 +159,22 @@ export class InProcessConnectorClient implements ConnectorClient {
     options: { url?: string; tabId?: TabId } = {}
   ): Promise<AuditReport> {
     return this.#connector.runAudit(category, options);
+  }
+
+  async exportConsole(
+    options: { tabId?: TabId; allTabs?: boolean } = {}
+  ): Promise<ExportResult<ConsoleEntry>> {
+    return this.#connector.exportConsole(options);
+  }
+
+  async exportNetwork(
+    options: { tabId?: TabId; allTabs?: boolean } = {}
+  ): Promise<ExportResult<NetworkEntry>> {
+    return this.#connector.exportNetwork(options);
+  }
+
+  async readArtifact(kind: "screenshot" | "audit", name: string): Promise<Artifact> {
+    return this.#connector.readArtifact(kind, name);
   }
 }
 
@@ -260,5 +285,21 @@ export class HttpConnectorClient implements ConnectorClient {
     options: { url?: string; tabId?: TabId } = {}
   ): Promise<AuditReport> {
     return this.#request(`/api/audit/${category}`, { method: "POST", body: options });
+  }
+
+  exportConsole(
+    options: { tabId?: TabId; allTabs?: boolean } = {}
+  ): Promise<ExportResult<ConsoleEntry>> {
+    return this.#request("/api/export/console", { query: options as Record<string, unknown> });
+  }
+
+  exportNetwork(
+    options: { tabId?: TabId; allTabs?: boolean } = {}
+  ): Promise<ExportResult<NetworkEntry>> {
+    return this.#request("/api/export/network", { query: options as Record<string, unknown> });
+  }
+
+  readArtifact(kind: "screenshot" | "audit", name: string): Promise<Artifact> {
+    return this.#request(`/api/artifact/${kind}/${encodeURIComponent(name)}`);
   }
 }

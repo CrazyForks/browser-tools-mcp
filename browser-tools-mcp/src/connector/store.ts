@@ -282,6 +282,26 @@ export class TelemetryStore {
     return result;
   }
 
+  /**
+   * Every matching console entry, with no query budget applied.
+   *
+   * Used to back a resource, where the caller has explicitly asked for the
+   * whole thing rather than a context-sized sample.
+   */
+  allConsole(tabId?: TabId): ConsoleEntry[] {
+    if (tabId === undefined) return [...this.#console];
+    const key = tabKey(tabId);
+    return this.#console.filter((entry) => tabKey(entry.tabId) === key);
+  }
+
+  allNetwork(tabId?: TabId): NetworkEntry[] {
+    const key = tabId === undefined ? null : tabKey(tabId);
+    return this.#network
+      .filter((entry) => key === null || tabKey(entry.tabId) === key)
+      // Header visibility is a privacy setting, so it applies to exports too.
+      .map((entry) => this.#applyHeaderVisibility(entry));
+  }
+
   /** Tabs that have produced telemetry, newest activity first. */
   knownTabs(): TabId[] {
     const seen = new Map<string, TabId>();

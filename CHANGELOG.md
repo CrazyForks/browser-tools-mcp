@@ -4,6 +4,13 @@
 
 ### Added
 
+- **Large payloads are MCP resources now, not inlined text.** Full console and
+  network history, network traffic as a HAR 1.2 file, captured screenshots, and
+  the unabridged Lighthouse result behind an audit summary are all readable at
+  `browser-tools://…` URIs. Tools attach a `resource_link` — when a log read was
+  cut short, alongside every network read for the HAR, and always for a
+  screenshot, which is the only route to one too large to inline. Only the 20
+  most recent full audit reports are kept on disk.
 - **Multi-tab support.** Every tab with DevTools open is tracked separately,
   telemetry is attributed to the tab that produced it, and retention is per tab
   so a noisy page cannot evict a quiet one's history. New `listBrowserTabs`

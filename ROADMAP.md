@@ -6,7 +6,7 @@ _Audit date: 2026-07-30. Based on a full review of all 21 open PRs, 8 open issue
 
 ## Status: implemented on branch `revival/v2`
 
-Everything in P0-P4 below is built and tested. 316 tests pass and `npm audit`
+Everything in P0-P4 below is built and tested. 346 tests pass and `npm audit`
 reports zero vulnerabilities, down from 22.
 
 Test coverage spans: pure units; the connector's HTTP and WebSocket surface
@@ -19,11 +19,12 @@ MCP client -> server -> connector -> extension -> page chain.
 
 Known gaps, in priority order:
 
-- Three MCP protocol items from P3 are not built: resource links, Streamable
-  HTTP transport, and progress notifications. See the stateless-MCP assessment
-  for why none is urgent.
-- Screenshots accumulate with no retention policy; audits have no concurrency
-  limit.
+- Two MCP protocol items from P3 are not built: Streamable HTTP transport and
+  progress notifications. See the stateless-MCP assessment for why neither is
+  urgent — statelessness is a protocol-session concept and does not affect a
+  locally-spawned stdio server.
+- Screenshots accumulate with no retention policy (audit reports are capped at
+  20); audits have no concurrency limit.
 
 Still unverified by automation, and worth a manual pass: the extension running
 under Firefox, Windows and WSL, and installation via `npx` from a published

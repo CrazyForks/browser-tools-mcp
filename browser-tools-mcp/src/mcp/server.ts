@@ -3,6 +3,14 @@ import { z } from "zod";
 
 import type { ConnectorClient } from "./client.js";
 import { PROMPTS } from "./prompts.js";
+import {
+  auditUri,
+  consoleUri,
+  harUri,
+  networkUri,
+  registerResources,
+  screenshotUri,
+} from "./resources.js";
 import { createLogger } from "../util/logger.js";
 import { AUDIT_CATEGORIES, type AuditCategory } from "../lighthouse/types.js";
 
@@ -21,7 +29,27 @@ export interface McpServerOptions {
 
 type TextContent = { type: "text"; text: string };
 type ImageContent = { type: "image"; data: string; mimeType: string };
-type ToolContent = TextContent | ImageContent;
+type ResourceLink = {
+  type: "resource_link";
+  uri: string;
+  name: string;
+  description?: string;
+  mimeType?: string;
+};
+type ToolContent = TextContent | ImageContent | ResourceLink;
+
+/**
+ * A pointer to the unabridged data, for when a result had to be cut down.
+ * Cheap to include, and the client only fetches it if it decides to.
+ */
+function link(
+  uri: string,
+  name: string,
+  description: string,
+  mimeType = "application/json"
+): ResourceLink {
+  return { type: "resource_link", uri, name, description, mimeType };
+}
 
 type ToolResult = {
   content: ToolContent[];
@@ -44,6 +72,44 @@ function fail(error: unknown): ToolResult {
   const message = error instanceof Error ? error.message : String(error);
   log.warn("Tool call failed:", message);
   return { content: [{ type: "text", text: message }], isError: true };
+}
+
+/** Offers the complete history whenever a read had to be cut short. */
+function truncationLinks(result: { truncated: boolean; tabId: unknown }): ToolContent[] {
+  if (!result.truncated) return [];
+  const tabId = result.tabId as string | number | null;
+  return [
+    link(
+      consoleUri(tabId),
+      "console-history",
+      "Every captured console entry, without the per-call size budget"
+    ),
+  ];
+}
+
+/** Network reads always offer a HAR; the full history only when clipped. */
+function networkLinks(result: {
+  truncated: boolean;
+  total: number;
+  tabId: unknown;
+}): ToolContent[] {
+  const tabId = result.tabId as string | number | null;
+  const links: ToolContent[] = [];
+  if (result.total > 0) {
+    links.push(
+      link(harUri(tabId), "network-har", "This tab's network activity as a HAR file")
+    );
+  }
+  if (result.truncated) {
+    links.push(
+      link(
+        networkUri(tabId),
+        "network-history",
+        "Every captured request, without the per-call size budget"
+      )
+    );
+  }
+  return links;
 }
 
 const queryOutputShape = {
@@ -149,7 +215,18 @@ function auditTool(
               ...(url ? { url } : {}),
               ...(tabId !== undefined ? { tabId } : {}),
             });
-            return ok(report as unknown as Record<string, unknown>);
+            return ok(
+              report as unknown as Record<string, unknown>,
+              report.reportId
+                ? [
+                    link(
+                      auditUri(report.reportId),
+                      `${category}-report`,
+                      "The unabridged Lighthouse result behind this summary"
+                    ),
+                  ]
+                : []
+            );
           } catch (error) {
             return fail(error);
           }
@@ -215,7 +292,8 @@ const TOOLS: ToolDefinition[] = [
         },
         async (args) => {
           try {
-            return ok((await client.console({ ...args })) as unknown as Record<string, unknown>);
+            const result = await client.console({ ...args });
+            return ok(result as unknown as Record<string, unknown>, truncationLinks(result));
           } catch (error) {
             return fail(error);
           }
@@ -244,9 +322,8 @@ const TOOLS: ToolDefinition[] = [
         },
         async (args) => {
           try {
-            return ok(
-              (await client.console({ ...args, errorsOnly: true })) as unknown as Record<string, unknown>
-            );
+            const result = await client.console({ ...args, errorsOnly: true });
+            return ok(result as unknown as Record<string, unknown>, truncationLinks(result));
           } catch (error) {
             return fail(error);
           }
@@ -283,7 +360,8 @@ const TOOLS: ToolDefinition[] = [
         },
         async (args) => {
           try {
-            return ok((await client.network({ ...args })) as unknown as Record<string, unknown>);
+            const result = await client.network({ ...args });
+            return ok(result as unknown as Record<string, unknown>, networkLinks(result));
           } catch (error) {
             return fail(error);
           }
@@ -316,9 +394,8 @@ const TOOLS: ToolDefinition[] = [
         },
         async (args) => {
           try {
-            return ok(
-              (await client.network({ ...args, errorsOnly: true })) as unknown as Record<string, unknown>
-            );
+            const result = await client.network({ ...args, errorsOnly: true });
+            return ok(result as unknown as Record<string, unknown>, networkLinks(result));
           } catch (error) {
             return fail(error);
           }
@@ -483,19 +560,28 @@ const TOOLS: ToolDefinition[] = [
             // An oversized image is left on disk rather than inlined: it would
             // swamp the context window, and newer MCP stdio transports drop the
             // connection outright past their read buffer.
+            const asResource = link(
+              screenshotUri(result.name),
+              result.name,
+              "The captured screenshot",
+              result.mimeType
+            );
+
             if (!result.withinBudget) {
               return ok(structured, [
                 {
                   type: "text",
                   text:
                     `The screenshot is ${Math.round(result.bytes / 1024)} KB, too large to include here. ` +
-                    `It was saved to ${result.path}. Lower screenshotMaxBytes or reduce the browser window size to get an inline image.`,
+                    `It was saved to ${result.path} and can be read from the linked resource.`,
                 },
+                asResource,
               ]);
             }
 
             return ok(structured, [
               { type: "image", data: base64, mimeType: result.mimeType },
+              asResource,
             ]);
           } catch (error) {
             return fail(error);
@@ -670,7 +756,7 @@ export function createMcpServer(options: McpServerOptions): {
 } {
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
-    { capabilities: { tools: {}, prompts: {} } }
+    { capabilities: { tools: {}, prompts: {}, resources: {} } }
   );
 
   const enabled = new Set(options.enabledTools ?? ALL_TOOL_NAMES);
@@ -687,6 +773,8 @@ export function createMcpServer(options: McpServerOptions): {
 
   for (const tool of selected) tool.register(server, options.client);
 
+  registerResources(server, options.client);
+
   for (const prompt of PROMPTS) {
     server.registerPrompt(
       prompt.name,
@@ -697,7 +785,9 @@ export function createMcpServer(options: McpServerOptions): {
     );
   }
 
-  log.info(`Registered ${selected.length} tools and ${PROMPTS.length} prompts`);
+  log.info(
+    `Registered ${selected.length} tools, ${PROMPTS.length} prompts and 5 resource templates`
+  );
 
   return { server, toolNames: selected.map((tool) => tool.name) };
 }

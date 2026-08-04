@@ -90,4 +90,6 @@ export interface AuditReport {
   issues: AuditIssue[];
   groups?: Record<string, { issues: number }>;
   metrics?: Record<string, AuditMetric>;
+  /** Identifier of the stored unabridged report, when one was kept. */
+  reportId?: string;
 }

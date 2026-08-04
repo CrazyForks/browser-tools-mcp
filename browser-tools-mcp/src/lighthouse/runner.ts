@@ -4,6 +4,11 @@ import type { AuditCategory, AuditReport, LighthouseResultLike } from "./types.j
 
 const log = createLogger("lighthouse");
 
+export interface AuditHooks {
+  /** Receives the unabridged Lighthouse result, for persisting as an artifact. */
+  onRawResult?: (lhr: unknown) => void;
+}
+
 export interface AuditOptions {
   url: string;
   category: AuditCategory;
@@ -50,7 +55,10 @@ const CHROME_FLAGS = [
  * Chrome and Lighthouse are imported lazily so that a partial install degrades
  * to "audits unavailable" instead of preventing the whole server from starting.
  */
-export async function runLighthouseAudit(options: AuditOptions): Promise<AuditReport> {
+export async function runLighthouseAudit(
+  options: AuditOptions,
+  hooks: AuditHooks = {}
+): Promise<AuditReport> {
   const { category, device = "desktop", timeoutMs = 60_000 } = options;
   const url = assertAuditableUrl(options.url).toString();
 
@@ -90,6 +98,7 @@ export async function runLighthouseAudit(options: AuditOptions): Promise<AuditRe
     const lhr = result?.lhr;
     if (!lhr) throw new AuditError("Lighthouse returned no result");
 
+    hooks.onRawResult?.(lhr);
     return extractAuditReport(lhr, url, category);
   } catch (error) {
     if (error instanceof AuditError) throw error;

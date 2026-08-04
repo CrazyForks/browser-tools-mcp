@@ -75,6 +75,15 @@ class UnavailableConnectorClient implements ConnectorClient {
   audit(): Promise<never> {
     return this.#fail();
   }
+  exportConsole(): Promise<never> {
+    return this.#fail();
+  }
+  exportNetwork(): Promise<never> {
+    return this.#fail();
+  }
+  readArtifact(): Promise<never> {
+    return this.#fail();
+  }
 }
 
 /**

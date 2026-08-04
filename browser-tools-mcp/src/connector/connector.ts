@@ -30,7 +30,7 @@ import {
   parseImageDataUrl,
   withExtension,
 } from "../util/image.js";
-import { AuditError, runLighthouseAudit } from "../lighthouse/runner.js";
+import { AuditError, runLighthouseAudit, type AuditHooks } from "../lighthouse/runner.js";
 import { isAuditCategory, type AuditCategory, type AuditReport } from "../lighthouse/types.js";
 
 export const SERVER_SIGNATURE = "mcp-browser-connector-24x7";
@@ -83,7 +83,10 @@ export interface ConnectorConfig {
   /** Escape hatch, off by default, for users who knowingly expose the server. */
   allowNonLoopback?: boolean;
   /** Injectable so audits can be exercised without launching a browser. */
-  auditRunner?: (options: { url: string; category: AuditCategory }) => Promise<AuditReport>;
+  auditRunner?: (
+    options: { url: string; category: AuditCategory },
+    hooks?: AuditHooks
+  ) => Promise<AuditReport>;
 }
 
 export interface TabView {
@@ -93,6 +96,19 @@ export interface TabView {
   isCurrent: boolean;
   consoleCount: number;
   networkCount: number;
+}
+
+export interface ExportResult<T> {
+  tabId: TabId | null;
+  url: string;
+  entries: T[];
+}
+
+export interface Artifact {
+  mimeType: string;
+  /** Text artifacts carry `text`; binary ones carry base64 `blob`. */
+  text?: string;
+  blob?: string;
 }
 
 /** A query result, plus which tab it describes. */
@@ -133,6 +149,10 @@ export interface Connector {
   queryConsole(query: ConsoleQuery & { allTabs?: boolean }): TabScopedResult<ConsoleEntry>;
   queryNetwork(query: NetworkQuery & { allTabs?: boolean }): TabScopedResult<NetworkEntry>;
   getSelectedElement(options?: { tabId?: TabId }): unknown;
+  /** Complete history, with no per-call budget applied. Backs the resources. */
+  exportConsole(options?: { tabId?: TabId; allTabs?: boolean }): ExportResult<ConsoleEntry>;
+  exportNetwork(options?: { tabId?: TabId; allTabs?: boolean }): ExportResult<NetworkEntry>;
+  readArtifact(kind: "screenshot" | "audit", name: string): Promise<Artifact>;
   captureScreenshot(options?: { name?: string; tabId?: TabId }): Promise<ScreenshotCapture>;
   refreshTab(options?: { tabId?: TabId }): Promise<void>;
   readStorage(kinds: string[], options?: { tabId?: TabId }): Promise<Record<string, unknown>>;
@@ -229,6 +249,33 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
     const settings = store.updateSettings(req.body);
     broadcast({ type: "settings", settings });
     res.json({ settings });
+  });
+
+  api.get("/export/:kind", (req: Request, res: Response) => {
+    try {
+      const kind = String(req.params["kind"] ?? "");
+      const scope = parseTabScope(req.query);
+      if (kind === "console") return void res.json(exportConsole(scope));
+      if (kind === "network") return void res.json(exportNetwork(scope));
+      res.status(400).json({ error: `Unknown export: ${kind}`, code: "BAD_EXPORT" });
+    } catch (error) {
+      respondWithError(res, error);
+    }
+  });
+
+  api.get("/artifact/:kind/:name", async (req: Request, res: Response) => {
+    try {
+      const kind = String(req.params["kind"] ?? "");
+      if (kind !== "screenshot" && kind !== "audit") {
+        return void res.status(400).json({ error: `Unknown artifact: ${kind}` });
+      }
+      res.json(await readArtifact(kind, String(req.params["name"] ?? "")));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+        return void res.status(404).json({ error: "No such artifact", code: "NO_ARTIFACT" });
+      }
+      respondWithError(res, error);
+    }
   });
 
   api.get("/tabs", (_req, res) => {
@@ -603,6 +650,70 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
     return { ...result, ...scoped };
   }
 
+  function exportConsole(
+    options: { tabId?: TabId; allTabs?: boolean } = {}
+  ): ExportResult<ConsoleEntry> {
+    const scoped = scope(options.allTabs, options.tabId);
+    return {
+      tabId: scoped.tabId,
+      url: scoped.url,
+      entries: store.allConsole(scoped.tabId ?? undefined),
+    };
+  }
+
+  function exportNetwork(
+    options: { tabId?: TabId; allTabs?: boolean } = {}
+  ): ExportResult<NetworkEntry> {
+    const scoped = scope(options.allTabs, options.tabId);
+    return {
+      tabId: scoped.tabId,
+      url: scoped.url,
+      entries: store.allNetwork(scoped.tabId ?? undefined),
+    };
+  }
+
+  const auditDir = path.join(screenshotDir, "audits");
+  /** Raw Lighthouse results are megabytes each, so only recent ones are kept. */
+  const MAX_STORED_AUDIT_REPORTS = 20;
+
+  function pruneAuditReports(): void {
+    try {
+      const files = fs
+        .readdirSync(auditDir)
+        .filter((name) => name.endsWith(".json"))
+        .map((name) => ({
+          name,
+          modified: fs.statSync(path.join(auditDir, name)).mtimeMs,
+        }))
+        .sort((a, b) => b.modified - a.modified);
+
+      for (const stale of files.slice(MAX_STORED_AUDIT_REPORTS)) {
+        fs.rmSync(path.join(auditDir, stale.name), { force: true });
+      }
+    } catch (error) {
+      log.warn("Could not prune stored audit reports:", error);
+    }
+  }
+
+  /**
+   * Reads a stored artifact by name.
+   *
+   * Names are resolved inside a fixed directory with the same validation used
+   * for screenshot writes, so a resource uri cannot be turned into an arbitrary
+   * file read.
+   */
+  async function readArtifact(kind: "screenshot" | "audit", name: string): Promise<Artifact> {
+    const base = kind === "screenshot" ? screenshotDir : auditDir;
+    const resolved = resolveSafeScreenshotPath(base, name);
+    const bytes = await fs.promises.readFile(resolved);
+
+    if (kind === "audit") {
+      return { mimeType: "application/json", text: bytes.toString("utf8") };
+    }
+    const mimeType = resolved.endsWith(".jpg") ? "image/jpeg" : "image/png";
+    return { mimeType, blob: bytes.toString("base64") };
+  }
+
   function getSelectedElement(options: { tabId?: TabId } = {}): unknown {
     const tabId = resolveTabId(options.tabId);
     return tabId === null ? store.getSelectedElement() : store.getSelectedElement(tabId);
@@ -847,7 +958,26 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
       );
     }
     const runner = config.auditRunner ?? runLighthouseAudit;
-    return runner({ url, category });
+
+    // The condensed report is what an agent reads; the unabridged Lighthouse
+    // result is kept on disk and offered as a resource for when it is needed.
+    let reportId: string | undefined;
+    const hooks: AuditHooks = {
+      onRawResult: (lhr) => {
+        try {
+          fs.mkdirSync(auditDir, { recursive: true });
+          const name = `${category}-${Date.now()}-${crypto.randomBytes(3).toString("hex")}.json`;
+          fs.writeFileSync(resolveSafeScreenshotPath(auditDir, name), JSON.stringify(lhr));
+          reportId = name;
+          pruneAuditReports();
+        } catch (error) {
+          log.warn("Could not store the full audit report:", error);
+        }
+      },
+    };
+
+    const report = await runner({ url, category }, hooks);
+    return reportId ? { ...report, reportId } : report;
   }
 
   function broadcast(message: unknown): void {
@@ -904,6 +1034,9 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
     queryConsole,
     queryNetwork,
     getSelectedElement,
+    exportConsole,
+    exportNetwork,
+    readArtifact,
     captureScreenshot,
     refreshTab,
     readStorage,

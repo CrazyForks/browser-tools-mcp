@@ -111,6 +111,25 @@ the `tabId` and `url` it came from, plus `otherTabs`, so a wrong-tab answer is
 visible rather than silent. To target a specific tab, call `listBrowserTabs` and
 pass its `tabId` to any tool; pass `allTabs: true` to read across every tab.
 
+### Large data stays out of the context window
+
+Whole-history payloads are exposed as MCP **resources** rather than inlined, and
+tools link to them with `resource_link` so your agent fetches them only when it
+decides to:
+
+| Resource | What it is |
+| --- | --- |
+| `browser-tools://console/{tabId\|all}` | Every console entry, with no per-call budget |
+| `browser-tools://network/{tabId\|all}` | Every captured request, including bodies |
+| `browser-tools://har/{tabId\|all}` | The same traffic as a HAR 1.2 file |
+| `browser-tools://screenshot/{name}` | A screenshot you captured earlier |
+| `browser-tools://audit/{reportId}` | The unabridged Lighthouse result behind a summary |
+
+Log tools attach a link when a read had to be cut short; network reads always
+offer the HAR; screenshots always link to the stored image, which is the only
+way to see one too large to inline. The last 20 full Lighthouse reports are kept
+under `audits/` in the screenshot directory.
+
 ### Keeping responses small
 
 Log payloads are the usual cause of a blown context window. Every read tool
