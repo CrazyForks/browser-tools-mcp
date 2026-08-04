@@ -6,7 +6,15 @@ import path from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import type { Duplex } from "node:stream";
 
-import { TelemetryStore } from "./store.js";
+import {
+  TelemetryStore,
+  type ConsoleEntry,
+  type ConsoleQuery,
+  type NetworkEntry,
+  type NetworkQuery,
+  type QueryResult,
+  type TabId,
+} from "./store.js";
 import { localOnlyGuard, requireToken, isExtensionOrigin, isLoopbackHost } from "./security.js";
 import { generateToken, tokensMatch } from "../util/session.js";
 import { createLogger } from "../util/logger.js";
@@ -37,6 +45,13 @@ export class NoExtensionError extends Error {
         "capture starts as soon as DevTools is open. Run `browser-tools-mcp --doctor` to check the setup."
     );
     this.name = "NoExtensionError";
+  }
+}
+
+export class UnknownTabError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnknownTabError";
   }
 }
 
@@ -71,6 +86,23 @@ export interface ConnectorConfig {
   auditRunner?: (options: { url: string; category: AuditCategory }) => Promise<AuditReport>;
 }
 
+export interface TabView {
+  tabId: TabId;
+  url: string;
+  /** True for the tab that tools act on when no tabId is given. */
+  isCurrent: boolean;
+  consoleCount: number;
+  networkCount: number;
+}
+
+/** A query result, plus which tab it describes. */
+export interface TabScopedResult<T> extends QueryResult<T> {
+  tabId: TabId | null;
+  url: string;
+  /** Connected tabs this result does NOT cover. */
+  otherTabs: number;
+}
+
 export interface ScreenshotCapture {
   path: string;
   /** Data URL, carrying whichever format the browser settled on. */
@@ -80,6 +112,9 @@ export interface ScreenshotCapture {
   bytes: number;
   /** False when the browser could not get the image under the byte budget. */
   withinBudget: boolean;
+  /** Which tab was captured, so a wrong-tab shot is obvious rather than silent. */
+  tabId: TabId | null;
+  url: string;
 }
 
 export interface Connector {
@@ -91,10 +126,20 @@ export interface Connector {
   token: string;
   screenshotDir: string;
   hasExtension(): boolean;
-  captureScreenshot(options?: { name?: string }): Promise<ScreenshotCapture>;
-  refreshTab(): Promise<void>;
-  readStorage(kinds: string[]): Promise<Record<string, unknown>>;
-  runAudit(category: AuditCategory, options?: { url?: string }): Promise<AuditReport>;
+  /** Tabs with DevTools open right now. */
+  listTabs(): TabView[];
+  getCurrentTabId(): TabId | null;
+  setCurrentTab(tabId: TabId): void;
+  queryConsole(query: ConsoleQuery & { allTabs?: boolean }): TabScopedResult<ConsoleEntry>;
+  queryNetwork(query: NetworkQuery & { allTabs?: boolean }): TabScopedResult<NetworkEntry>;
+  getSelectedElement(options?: { tabId?: TabId }): unknown;
+  captureScreenshot(options?: { name?: string; tabId?: TabId }): Promise<ScreenshotCapture>;
+  refreshTab(options?: { tabId?: TabId }): Promise<void>;
+  readStorage(kinds: string[], options?: { tabId?: TabId }): Promise<Record<string, unknown>>;
+  runAudit(
+    category: AuditCategory,
+    options?: { url?: string; tabId?: TabId }
+  ): Promise<AuditReport>;
   close(): Promise<void>;
 }
 
@@ -111,6 +156,16 @@ interface PendingRequest {
   resolve: (value: Record<string, unknown>) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  /** Only the connection the request was sent to may answer it. */
+  connectionId: string;
+}
+
+/** A browser tab that has had DevTools open during this connector's lifetime. */
+interface TabRecord {
+  tabId: TabId;
+  connectionId: string | null;
+  url: string;
+  lastActivityAt: number;
 }
 
 export async function createConnector(config: ConnectorConfig = {}): Promise<Connector> {
@@ -132,7 +187,17 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
 
   const connections = new Map<string, ExtensionConnection>();
   const pending = new Map<string, PendingRequest>();
-  let activeConnectionId: string | null = null;
+
+  /** Tabs currently connected, keyed by String(tabId). */
+  const tabs = new Map<string, TabRecord>();
+  /**
+   * Every tabId bound during this connector's life, including tabs that have
+   * since disconnected. This is what distinguishes a user deliberately opening
+   * DevTools on a new tab from a throttled tab's socket coming back — both look
+   * identical on the wire.
+   */
+  const seenTabIds = new Set<string>();
+  let currentTabId: TabId | null = null;
 
   // ------------------------------------------------------------- http app
 
@@ -166,35 +231,72 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
     res.json({ settings });
   });
 
-  api.get("/console", (req, res) => {
-    res.json(
-      store.queryConsole({
-        errorsOnly: parseBool(req.query["errorsOnly"]) ?? false,
-        keywords: parseList(req.query["keywords"]),
-        limit: parseCount(req.query["limit"]),
-        offset: parseCount(req.query["offset"]),
-      })
-    );
+  api.get("/tabs", (_req, res) => {
+    res.json({ tabs: listTabs(), currentTabId, connectedTabs: tabs.size });
   });
 
-  api.get("/network", (req, res) => {
-    res.json(
-      store.queryNetwork({
-        errorsOnly: parseBool(req.query["errorsOnly"]) ?? false,
-        urlKeywords: parseList(req.query["urlKeywords"]),
-        bodyKeywords: parseList(req.query["bodyKeywords"]),
-        limit: parseCount(req.query["limit"]),
-        offset: parseCount(req.query["offset"]),
-      })
-    );
+  api.post("/tabs/select", (req: Request, res: Response) => {
+    try {
+      setCurrentTab(req.body?.tabId);
+      res.json({ currentTabId });
+    } catch (error) {
+      respondWithError(res, error);
+    }
   });
 
-  api.get("/selected-element", (_req, res) => {
-    res.json({ element: store.getSelectedElement() });
+  api.get("/console", (req: Request, res: Response) => {
+    try {
+      res.json(
+        queryConsole({
+          errorsOnly: parseBool(req.query["errorsOnly"]) ?? false,
+          keywords: parseList(req.query["keywords"]),
+          ...parseTabScope(req.query),
+          limit: parseCount(req.query["limit"]),
+          offset: parseCount(req.query["offset"]),
+        })
+      );
+    } catch (error) {
+      respondWithError(res, error);
+    }
+  });
+
+  api.get("/network", (req: Request, res: Response) => {
+    try {
+      res.json(
+        queryNetwork({
+          errorsOnly: parseBool(req.query["errorsOnly"]) ?? false,
+          urlKeywords: parseList(req.query["urlKeywords"]),
+          bodyKeywords: parseList(req.query["bodyKeywords"]),
+          ...parseTabScope(req.query),
+          limit: parseCount(req.query["limit"]),
+          offset: parseCount(req.query["offset"]),
+        })
+      );
+    } catch (error) {
+      respondWithError(res, error);
+    }
+  });
+
+  api.get("/selected-element", (req: Request, res: Response) => {
+    try {
+      const scope = parseTabScope(req.query);
+      res.json({
+        element: getSelectedElement(scope.tabId !== undefined ? { tabId: scope.tabId } : {}),
+      });
+    } catch (error) {
+      respondWithError(res, error);
+    }
   });
 
   api.get("/page", (_req, res) => {
-    res.json({ ...store.getCurrentPage(), extensionConnected: connections.size > 0 });
+    const current = currentTabId !== null ? tabs.get(String(currentTabId)) : undefined;
+    const page = store.getCurrentPage();
+    res.json({
+      url: current?.url || page.url,
+      tabId: currentTabId ?? page.tabId,
+      extensionConnected: connections.size > 0,
+      connectedTabs: tabs.size,
+    });
   });
 
   api.get("/status", (_req, res) => {
@@ -202,6 +304,8 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
       version: SERVER_VERSION,
       extensionConnected: connections.size > 0,
       connections: connections.size,
+      tabs: tabs.size,
+      currentTabId,
       screenshotDir,
       settings: store.settings,
       counts: {
@@ -211,24 +315,28 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
     });
   });
 
-  api.post("/wipe", (_req, res) => {
-    store.wipe();
+  api.post("/wipe", (req, res) => {
+    store.wipe(req.body?.tabId);
     res.json({ ok: true });
   });
 
   api.post("/screenshot", async (req: Request, res: Response) => {
     try {
       const name = typeof req.body?.name === "string" ? req.body.name : undefined;
-      const result = await captureScreenshot(name ? { name } : {});
+      const tabId = req.body?.tabId;
+      const result = await captureScreenshot({
+        ...(name ? { name } : {}),
+        ...(tabId !== undefined ? { tabId } : {}),
+      });
       res.json(result);
     } catch (error) {
       respondWithError(res, error);
     }
   });
 
-  api.post("/refresh", async (_req: Request, res: Response) => {
+  api.post("/refresh", async (req: Request, res: Response) => {
     try {
-      await refreshTab();
+      await refreshTab(req.body?.tabId !== undefined ? { tabId: req.body.tabId } : {});
       res.json({ ok: true });
     } catch (error) {
       respondWithError(res, error);
@@ -238,7 +346,10 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
   api.post("/storage", async (req: Request, res: Response) => {
     try {
       const kinds = parseList(req.body?.kinds) ?? ["localStorage", "sessionStorage"];
-      const storage = await readStorage(kinds);
+      const storage = await readStorage(
+        kinds,
+        req.body?.tabId !== undefined ? { tabId: req.body.tabId } : {}
+      );
       res.json({ storage });
     } catch (error) {
       respondWithError(res, error);
@@ -318,7 +429,6 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
       tabId: null,
     };
     connections.set(id, connection);
-    activeConnectionId = id;
     log.info(`Extension connected (${connections.size} active)`);
 
     // Without this the process used to die on any socket-level error.
@@ -374,13 +484,178 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
     const connection = connections.get(id);
     if (!connection) return;
     connections.delete(id);
-    if (activeConnectionId === id) {
-      // Fall back to whichever connection is still open rather than leaving a
-      // dangling pointer, which used to break capture with two DevTools windows.
-      const next = [...connections.values()].sort((a, b) => b.lastSeen - a.lastSeen)[0];
-      activeConnectionId = next?.id ?? null;
+
+    // Fail anything waiting on this socket now, rather than letting the caller
+    // sit through the full request timeout for a window that is already gone.
+    for (const [requestId, entry] of [...pending.entries()]) {
+      if (entry.connectionId !== id) continue;
+      pending.delete(requestId);
+      clearTimeout(entry.timer);
+      entry.reject(
+        new ExtensionRequestError("The DevTools window handling this request was closed.")
+      );
     }
+
+    if (connection.tabId !== null) dropTab(connection.tabId, id);
     log.info(`Extension disconnected (${connections.size} active)`);
+  }
+
+  // ------------------------------------------------------------------ tabs
+
+  /**
+   * Attaches a connection to a tab.
+   *
+   * A tab becomes current only the first time it is ever seen, which is the
+   * user deliberately opening DevTools on it. A tab coming back — its socket
+   * dropped by the heartbeat while throttled in the background, then
+   * reconnecting — is indistinguishable on the wire, so `seenTabIds` is what
+   * tells them apart. Without it, a background tab silently steals targeting
+   * from the tab the user is looking at.
+   */
+  function bindTab(connection: ExtensionConnection, tabId: TabId): void {
+    const key = String(tabId);
+    connection.tabId = tabId;
+
+    const existing = tabs.get(key);
+    if (existing) {
+      existing.connectionId = connection.id;
+      existing.lastActivityAt = Date.now();
+    } else {
+      tabs.set(key, {
+        tabId,
+        connectionId: connection.id,
+        url: "",
+        lastActivityAt: Date.now(),
+      });
+    }
+
+    const firstSight = !seenTabIds.has(key);
+    seenTabIds.add(key);
+
+    if (firstSight || currentTabId === null) {
+      currentTabId = tabId;
+      log.info(`Current tab is now ${key}`);
+    }
+  }
+
+  function dropTab(tabId: TabId, connectionId: string): void {
+    const key = String(tabId);
+    const record = tabs.get(key);
+    // A newer socket may already have rebound this tab; leave it alone.
+    if (!record || record.connectionId !== connectionId) return;
+    tabs.delete(key);
+
+    if (String(currentTabId) === key) {
+      const next = [...tabs.values()].sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0];
+      currentTabId = next?.tabId ?? null;
+    }
+
+    // An empty registry means the browsing session ended. Chrome restarts tab
+    // numbering, so without forgetting, a genuinely new tab could be mistaken
+    // for one that is returning and would never become current.
+    if (tabs.size === 0) seenTabIds.clear();
+  }
+
+  function listTabs(): TabView[] {
+    return [...tabs.values()].map((record) => ({
+      tabId: record.tabId,
+      url: record.url,
+      isCurrent: String(record.tabId) === String(currentTabId),
+      consoleCount: store.queryConsole({ tabId: record.tabId }).total,
+      networkCount: store.queryNetwork({ tabId: record.tabId }).total,
+    }));
+  }
+
+  function tabUrl(tabId: TabId | null): string {
+    if (tabId === null) return store.getCurrentPage().url;
+    return tabs.get(String(tabId))?.url ?? "";
+  }
+
+  /** Scopes a query to one tab, defaulting to the current one. */
+  function scope(allTabs: boolean | undefined, requested: TabId | undefined) {
+    const tabId = allTabs ? null : resolveTabId(requested);
+    return {
+      tabId,
+      url: tabUrl(tabId),
+      otherTabs: tabId === null ? 0 : Math.max(0, tabs.size - 1),
+    };
+  }
+
+  function queryConsole(
+    query: ConsoleQuery & { allTabs?: boolean }
+  ): TabScopedResult<ConsoleEntry> {
+    const { allTabs, tabId: requested, ...rest } = query;
+    const scoped = scope(allTabs, requested);
+    const result = store.queryConsole(
+      scoped.tabId === null ? rest : { ...rest, tabId: scoped.tabId }
+    );
+    return { ...result, ...scoped };
+  }
+
+  function queryNetwork(
+    query: NetworkQuery & { allTabs?: boolean }
+  ): TabScopedResult<NetworkEntry> {
+    const { allTabs, tabId: requested, ...rest } = query;
+    const scoped = scope(allTabs, requested);
+    const result = store.queryNetwork(
+      scoped.tabId === null ? rest : { ...rest, tabId: scoped.tabId }
+    );
+    return { ...result, ...scoped };
+  }
+
+  function getSelectedElement(options: { tabId?: TabId } = {}): unknown {
+    const tabId = resolveTabId(options.tabId);
+    return tabId === null ? store.getSelectedElement() : store.getSelectedElement(tabId);
+  }
+
+  function describeTabs(): string {
+    const live = [...tabs.values()];
+    if (live.length === 0) return "No tabs are connected.";
+    return `Connected tabs: ${live.map((t) => `${t.tabId} (${t.url || "unknown url"})`).join(", ")}.`;
+  }
+
+  function setCurrentTab(tabId: TabId): void {
+    const key = String(tabId);
+    if (!tabs.has(key)) {
+      throw new UnknownTabError(`Unknown tab ${tabId}. ${describeTabs()}`);
+    }
+    currentTabId = tabs.get(key)!.tabId;
+  }
+
+  /** The tab a call refers to: the one named, else the current one. */
+  function resolveTabId(requested?: TabId): TabId | null {
+    if (requested === undefined || requested === null) return currentTabId;
+    const key = String(requested);
+    if (!tabs.has(key)) {
+      throw new UnknownTabError(
+        `Unknown tab ${requested}. ${describeTabs()} Call listBrowserTabs to see what is live.`
+      );
+    }
+    return tabs.get(key)!.tabId;
+  }
+
+  /** The live socket for a tab, or an error explaining which tabs exist. */
+  function connectionForTab(requested?: TabId): ExtensionConnection {
+    const tabId = resolveTabId(requested);
+
+    if (tabId === null) {
+      // No tab identity at all — either the extension has connected but not yet
+      // announced itself, or it predates tab reporting. There is no tab to pick
+      // wrongly here, so use whatever socket is open. Once any tab is known this
+      // path is never taken, and targeting is strict.
+      const fallback = [...connections.values()]
+        .filter((c) => c.ws.readyState === WebSocket.OPEN)
+        .sort((a, b) => b.lastSeen - a.lastSeen)[0];
+      if (!fallback) throw new NoExtensionError();
+      return fallback;
+    }
+
+    const record = tabs.get(String(tabId));
+    const connection = record?.connectionId ? connections.get(record.connectionId) : undefined;
+    if (!connection || connection.ws.readyState !== WebSocket.OPEN) {
+      throw new NoExtensionError();
+    }
+    return connection;
   }
 
   function handleExtensionMessage(
@@ -393,45 +668,67 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
     switch (type) {
       case "hello": {
         const tabId = message["tabId"];
-        if (typeof tabId === "number" || typeof tabId === "string") connection.tabId = tabId;
-        activeConnectionId = connection.id;
+        if (typeof tabId === "number" || typeof tabId === "string") bindTab(connection, tabId);
         break;
       }
       case "pong":
         connection.awaitingPong = false;
         connection.missedPings = 0;
         break;
+      // Attribution always comes from the connection, never the message body,
+      // so one page cannot file its output against another tab.
       case "console":
-        for (const entry of asEntries(message)) store.addConsole(entry);
+        for (const entry of asEntries(message)) store.addConsole(entry, connection.tabId);
         break;
       case "network":
-        for (const entry of asEntries(message)) store.addNetwork(entry);
+        for (const entry of asEntries(message)) store.addNetwork(entry, connection.tabId);
         break;
       case "selected-element":
-        store.setSelectedElement(message["element"]);
+        store.setSelectedElement(message["element"], connection.tabId);
         break;
-      case "page":
-        activeConnectionId = connection.id;
-        store.setCurrentPage({ url: message["url"], tabId: message["tabId"] });
+      case "page": {
+        const url = typeof message["url"] === "string" ? (message["url"] as string) : "";
+        const record = connection.tabId !== null ? tabs.get(String(connection.tabId)) : undefined;
+        if (record && url) {
+          record.url = url;
+          record.lastActivityAt = Date.now();
+        }
+        // Navigating does not make a tab current — a background tab on a timer
+        // would otherwise hijack every subsequent call.
+        if (record && String(connection.tabId) === String(currentTabId)) {
+          store.setCurrentPage({ url, tabId: connection.tabId });
+        } else if (!record) {
+          store.setCurrentPage({ url, tabId: message["tabId"] });
+        }
         break;
+      }
       case "settings":
         store.updateSettings(message["settings"]);
         break;
       case "screenshot-result":
       case "refresh-result":
       case "storage-result":
-        resolvePending(message);
+        resolvePending(connection, message);
         break;
       default:
         log.debug(`Ignoring unknown message type: ${type || "(none)"}`);
     }
   }
 
-  function resolvePending(message: Record<string, unknown>): void {
+  function resolvePending(
+    connection: ExtensionConnection,
+    message: Record<string, unknown>
+  ): void {
     const requestId = typeof message["requestId"] === "string" ? message["requestId"] : "";
     const entry = pending.get(requestId);
     if (!entry) {
       log.debug("Received a response for an unknown or expired request");
+      return;
+    }
+    // With several tabs connected, any of them could otherwise answer another
+    // tab's request and be believed.
+    if (entry.connectionId !== connection.id) {
+      log.warn("Discarded a response that came from a different tab than was asked");
       return;
     }
     pending.delete(requestId);
@@ -445,19 +742,12 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
     entry.resolve(message);
   }
 
-  /** Sends a request to the extension and waits for the matching requestId. */
+  /** Sends a request to one tab's DevTools page and awaits its answer. */
   function requestFromExtension(
+    connection: ExtensionConnection,
     type: string,
     payload: Record<string, unknown> = {}
   ): Promise<Record<string, unknown>> {
-    const connection =
-      (activeConnectionId ? connections.get(activeConnectionId) : undefined) ??
-      [...connections.values()].sort((a, b) => b.lastSeen - a.lastSeen)[0];
-
-    if (!connection || connection.ws.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new NoExtensionError());
-    }
-
     const requestId = crypto.randomUUID();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -466,21 +756,23 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
       }, requestTimeoutMs);
       timer.unref?.();
 
-      pending.set(requestId, { resolve, reject, timer });
+      pending.set(requestId, { resolve, reject, timer, connectionId: connection.id });
       send(connection.ws, { type, requestId, ...payload });
     });
   }
 
   async function captureScreenshot(
-    options: { name?: string } = {}
+    options: { name?: string; tabId?: TabId } = {}
   ): Promise<ScreenshotCapture> {
     // Validate the destination before involving the browser at all, so a bad
-    // name can never reach the filesystem.
+    // name is rejected as a bad name whether or not a tab is connected.
     const requestedName = options.name ?? screenshotFilename();
     resolveSafeScreenshotPath(screenshotDir, requestedName);
 
+    const connection = connectionForTab(options.tabId);
+
     const maxBytes = store.settings.screenshotMaxBytes;
-    const response = await requestFromExtension("capture-screenshot", {
+    const response = await requestFromExtension(connection, "capture-screenshot", {
       name: requestedName,
       maxBytes,
     });
@@ -516,15 +808,22 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
       mimeType: parsed.mimeType,
       bytes,
       withinBudget: bytes <= maxBytes,
+      tabId: connection.tabId,
+      url: connection.tabId !== null ? tabUrl(connection.tabId) : store.getCurrentPage().url,
     };
   }
 
-  async function refreshTab(): Promise<void> {
-    await requestFromExtension("refresh-tab");
+  async function refreshTab(options: { tabId?: TabId } = {}): Promise<void> {
+    await requestFromExtension(connectionForTab(options.tabId), "refresh-tab");
   }
 
-  async function readStorage(kinds: string[]): Promise<Record<string, unknown>> {
-    const response = await requestFromExtension("get-storage", { kinds });
+  async function readStorage(
+    kinds: string[],
+    options: { tabId?: TabId } = {}
+  ): Promise<Record<string, unknown>> {
+    const response = await requestFromExtension(connectionForTab(options.tabId), "get-storage", {
+      kinds,
+    });
     const storage = response["storage"];
     return storage && typeof storage === "object" ? (storage as Record<string, unknown>) : {};
   }
@@ -537,9 +836,11 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
    */
   async function runAudit(
     category: AuditCategory,
-    options: { url?: string } = {}
+    options: { url?: string; tabId?: TabId } = {}
   ): Promise<AuditReport> {
-    const url = options.url || store.getCurrentPage().url;
+    const named = options.tabId !== undefined ? resolveTabId(options.tabId) : null;
+    const namedUrl = named !== null ? tabs.get(String(named))?.url : undefined;
+    const url = options.url || namedUrl || store.getCurrentPage().url;
     if (!url) {
       throw new AuditError(
         "No page URL is known yet. Open the page in Chrome with DevTools open, or pass a url explicitly."
@@ -597,6 +898,12 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
     token,
     screenshotDir,
     hasExtension: () => connections.size > 0,
+    listTabs,
+    getCurrentTabId: () => currentTabId,
+    setCurrentTab,
+    queryConsole,
+    queryNetwork,
+    getSelectedElement,
     captureScreenshot,
     refreshTab,
     readStorage,
@@ -608,6 +915,10 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
 // ---------------------------------------------------------------- utilities
 
 function respondWithError(res: Response, error: unknown): void {
+  if (error instanceof UnknownTabError) {
+    res.status(404).json({ error: error.message, code: "UNKNOWN_TAB" });
+    return;
+  }
   if (error instanceof AuditError) {
     res.status(422).json({ error: error.message, code: "AUDIT_FAILED" });
     return;
@@ -655,6 +966,19 @@ function asEntries(message: Record<string, unknown>): unknown[] {
   if (Array.isArray(entries)) return entries;
   if (message["entry"] !== undefined) return [message["entry"]];
   return [];
+}
+
+/** Reads tabId / allTabs from a query string. */
+function parseTabScope(query: Record<string, unknown>): { tabId?: TabId; allTabs?: boolean } {
+  const out: { tabId?: TabId; allTabs?: boolean } = {};
+  const raw = query["tabId"];
+  if (typeof raw === "string" && raw.length > 0) {
+    const asNumber = Number(raw);
+    out.tabId = Number.isFinite(asNumber) ? asNumber : raw;
+  }
+  const allTabs = parseBool(query["allTabs"]);
+  if (allTabs !== undefined) out.allTabs = allTabs;
+  return out;
 }
 
 function parseBool(value: unknown): boolean | undefined {

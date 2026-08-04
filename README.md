@@ -80,6 +80,7 @@ exactly which piece is missing.
 | `getSelectedElement` | The element selected in the Elements panel |
 | `getPageInfo` | Which page the browser is currently on |
 | `getConnectionStatus` | Whether the extension is connected, and capture counts |
+| `listBrowserTabs` | Every tab with DevTools open, and the id to address it by |
 | `takeScreenshot` | Screenshot returned **as an image**, plus its file path |
 | `refreshBrowser` | Reloads the inspected tab |
 | `getBrowserStorage` | localStorage, sessionStorage and cookies (values gated) |
@@ -96,6 +97,19 @@ static text in every tool listing.
 All tools declare MCP output schemas, so clients receive structured data rather
 than prose they have to parse, and read-only tools are annotated as such so
 clients can auto-approve them safely.
+
+### Several tabs at once
+
+Every tab with DevTools open is tracked separately. Telemetry is attributed to
+the tab that produced it, and retention is per tab, so a chatty page cannot push
+out the history of the one you care about.
+
+Tools act on the **current tab** — the one you most recently opened DevTools on.
+A tab whose connection drops and comes back does not steal that position, which
+is what used to make screenshots capture the wrong page. Every result reports
+the `tabId` and `url` it came from, plus `otherTabs`, so a wrong-tab answer is
+visible rather than silent. To target a specific tab, call `listBrowserTabs` and
+pass its `tabId` to any tool; pass `allTabs: true` to read across every tab.
 
 ### Keeping responses small
 
@@ -153,9 +167,6 @@ it automatically.
 
 - Network capture starts when DevTools opens. Requests that finished before then
   are not recorded — reload the page to capture a full page load.
-- **With DevTools open on several tabs, telemetry and screenshots follow whichever
-  tab most recently connected or navigated.** There is no way to target a
-  specific tab yet. Keep DevTools open on the one tab you care about.
 - Screenshots are held to a byte budget (`screenshotMaxBytes`, 3 MB by default).
   A capture that would exceed it is re-encoded as JPEG and, if still too large,
   downscaled. A viewport capture of dense content on a high-DPI display can

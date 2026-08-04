@@ -2,7 +2,28 @@
 
 ## Unreleased
 
+### Added
+
+- **Multi-tab support.** Every tab with DevTools open is tracked separately,
+  telemetry is attributed to the tab that produced it, and retention is per tab
+  so a noisy page cannot evict a quiet one's history. New `listBrowserTabs`
+  tool; every other tool takes an optional `tabId`, and the log tools take
+  `allTabs`. Results carry `tabId`, `url` and `otherTabs` so a wrong-tab answer
+  is visible rather than silent. No extension change is required — it already
+  reports its tab id.
+
 ### Fixed
+
+- **A reconnecting background tab no longer steals targeting.** A tab that is
+  timer-throttled, misses the heartbeat and reconnects looked identical to a
+  user opening DevTools on a new tab, so it silently became the target of
+  screenshots and reads. The connector now remembers which tab ids it has seen,
+  so only genuinely new tabs take over.
+- A tab navigating in the background no longer takes over either.
+- A response can only resolve the request it was sent for, on the connection it
+  was sent to; previously any tab could answer another tab's request.
+- Closing a DevTools window now fails its in-flight requests immediately instead
+  of leaving the caller waiting for the full timeout.
 
 - **Screenshots are held to a byte budget.** A viewport capture of visually
   dense content measured 13.3 MB of base64 on a 1440p retina display and

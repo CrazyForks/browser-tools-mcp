@@ -21,7 +21,10 @@ evidence before changing code.
 1. Call getConnectionStatus first. If no extension is connected, stop and tell
    the user to open Chrome DevTools (F12) on the page they want inspected —
    nothing else will work until then.
-2. Call getPageInfo to confirm which page is actually being inspected.
+2. Call getPageInfo to confirm which page is actually being inspected. If
+   connectedTabs is above 1, call listBrowserTabs and pass an explicit tabId to
+   every later call — otherwise the logs you read may come from a different page
+   than the screenshot you take.
 3. Gather evidence in this order, using the keyword and limit parameters to
    keep responses small:
    - getConsoleErrors for thrown exceptions and error-level output
@@ -45,7 +48,8 @@ misbehaving.`;
 const AUDIT_MODE = `You are running a quality audit of a live page using BrowserTools MCP.
 
 1. Call getPageInfo and confirm with the user that this is the page they want
-   audited.
+   audited. If connectedTabs is above 1, call listBrowserTabs and name the tab
+   explicitly.
 2. Run the audits that match the user's concern rather than all four by reflex:
    - runAccessibilityAudit for screen-reader, contrast, and semantics issues
    - runPerformanceAudit for load and responsiveness metrics

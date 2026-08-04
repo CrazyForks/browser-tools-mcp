@@ -6,6 +6,8 @@ export const TINY_PNG_BASE64 =
 
 export interface FakeExtensionOptions {
   port: number;
+  /** Reported in `hello`, so the connector can tell tabs apart. */
+  tabId?: number | string;
   origin?: string;
   token?: string;
   /** Respond to capture-screenshot requests. Defaults to returning TINY_PNG_BASE64. */
@@ -49,7 +51,11 @@ export class FakeExtension {
       });
     });
 
-    this.send({ type: "hello", extensionVersion: "test", tabId: 1 });
+    this.send({
+      type: "hello",
+      extensionVersion: "test",
+      tabId: this.#options.tabId ?? 1,
+    });
   }
 
   async #handle(raw: WebSocket.RawData): Promise<void> {
@@ -111,6 +117,23 @@ export class FakeExtension {
       await new Promise((r) => setTimeout(r, 10));
     }
     throw new Error("Timed out waiting for message");
+  }
+
+  /**
+   * Drops and re-establishes the socket as the *same* devtools page, which is
+   * what a heartbeat timeout looks like on a backgrounded tab.
+   */
+  async reconnect(): Promise<void> {
+    const ws = this.#ws;
+    this.#ws = null;
+    if (ws) {
+      await new Promise<void>((resolve) => {
+        ws.once("close", () => resolve());
+        ws.terminate();
+        setTimeout(resolve, 300);
+      });
+    }
+    await this.connect();
   }
 
   /** Abrupt teardown, without a close handshake. */

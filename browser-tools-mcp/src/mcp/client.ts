@@ -1,10 +1,10 @@
-import type { Connector } from "../connector/connector.js";
+import type { Connector, TabScopedResult, TabView } from "../connector/connector.js";
 import type {
   ConsoleEntry,
   ConsoleQuery,
   NetworkEntry,
   NetworkQuery,
-  QueryResult,
+  TabId,
 } from "../connector/store.js";
 import type { AuditCategory, AuditReport } from "../lighthouse/types.js";
 
@@ -12,18 +12,32 @@ export interface PageInfo {
   url: string;
   tabId: number | string | null;
   extensionConnected: boolean;
+  connectedTabs: number;
 }
+
+export interface TabListing {
+  tabs: TabView[];
+  currentTabId: TabId | null;
+  connectedTabs: number;
+}
+
+export type ScopedConsoleQuery = ConsoleQuery & { allTabs?: boolean };
+export type ScopedNetworkQuery = NetworkQuery & { allTabs?: boolean };
 
 export interface ConnectorStatus {
   version: string;
   extensionConnected: boolean;
   connections: number;
+  tabs: number;
+  currentTabId: TabId | null;
   screenshotDir: string;
   counts: { console: number; network: number };
 }
 
 export interface ScreenshotResult {
   path: string;
+  tabId?: TabId | null;
+  url?: string;
   /** Data URL, carrying whichever format the browser settled on. */
   data: string;
   name: string;
@@ -39,16 +53,20 @@ export interface ScreenshotResult {
  * already running for another client).
  */
 export interface ConnectorClient {
-  console(query: ConsoleQuery): Promise<QueryResult<ConsoleEntry>>;
-  network(query: NetworkQuery): Promise<QueryResult<NetworkEntry>>;
-  selectedElement(): Promise<unknown>;
+  console(query: ScopedConsoleQuery): Promise<TabScopedResult<ConsoleEntry>>;
+  network(query: ScopedNetworkQuery): Promise<TabScopedResult<NetworkEntry>>;
+  selectedElement(options?: { tabId?: TabId }): Promise<unknown>;
   page(): Promise<PageInfo>;
   status(): Promise<ConnectorStatus>;
-  wipe(): Promise<void>;
-  screenshot(options: { name?: string }): Promise<ScreenshotResult>;
-  refresh(): Promise<void>;
-  storage(kinds: string[]): Promise<Record<string, unknown>>;
-  audit(category: AuditCategory, options?: { url?: string }): Promise<AuditReport>;
+  tabs(): Promise<TabListing>;
+  wipe(options?: { tabId?: TabId }): Promise<void>;
+  screenshot(options: { name?: string; tabId?: TabId }): Promise<ScreenshotResult>;
+  refresh(options?: { tabId?: TabId }): Promise<void>;
+  storage(kinds: string[], options?: { tabId?: TabId }): Promise<Record<string, unknown>>;
+  audit(
+    category: AuditCategory,
+    options?: { url?: string; tabId?: TabId }
+  ): Promise<AuditReport>;
 }
 
 /** Talks straight to an embedded connector — no network hop, no discovery. */
@@ -59,30 +77,38 @@ export class InProcessConnectorClient implements ConnectorClient {
     this.#connector = connector;
   }
 
-  async console(query: ConsoleQuery): Promise<QueryResult<ConsoleEntry>> {
-    return this.#connector.store.queryConsole(query);
+  async console(query: ScopedConsoleQuery): Promise<TabScopedResult<ConsoleEntry>> {
+    return this.#connector.queryConsole(query);
   }
 
-  async network(query: NetworkQuery): Promise<QueryResult<NetworkEntry>> {
-    return this.#connector.store.queryNetwork(query);
+  async network(query: ScopedNetworkQuery): Promise<TabScopedResult<NetworkEntry>> {
+    return this.#connector.queryNetwork(query);
   }
 
-  async selectedElement(): Promise<unknown> {
-    return this.#connector.store.getSelectedElement();
+  async selectedElement(options: { tabId?: TabId } = {}): Promise<unknown> {
+    return this.#connector.getSelectedElement(options);
   }
 
   async page(): Promise<PageInfo> {
+    const tabs = this.#connector.listTabs();
+    const current = tabs.find((tab) => tab.isCurrent);
+    const page = this.#connector.store.getCurrentPage();
     return {
-      ...this.#connector.store.getCurrentPage(),
+      url: current?.url || page.url,
+      tabId: this.#connector.getCurrentTabId() ?? page.tabId,
       extensionConnected: this.#connector.hasExtension(),
+      connectedTabs: tabs.length,
     };
   }
 
   async status(): Promise<ConnectorStatus> {
+    const tabs = this.#connector.listTabs();
     return {
       version: "2.0.0",
       extensionConnected: this.#connector.hasExtension(),
-      connections: this.#connector.hasExtension() ? 1 : 0,
+      connections: tabs.length,
+      tabs: tabs.length,
+      currentTabId: this.#connector.getCurrentTabId(),
       screenshotDir: this.#connector.screenshotDir,
       counts: {
         console: this.#connector.store.queryConsole({}).total,
@@ -91,23 +117,38 @@ export class InProcessConnectorClient implements ConnectorClient {
     };
   }
 
-  async wipe(): Promise<void> {
-    this.#connector.store.wipe();
+  async tabs(): Promise<TabListing> {
+    const tabs = this.#connector.listTabs();
+    return {
+      tabs,
+      currentTabId: this.#connector.getCurrentTabId(),
+      connectedTabs: tabs.length,
+    };
   }
 
-  async screenshot(options: { name?: string }): Promise<ScreenshotResult> {
+  async wipe(options: { tabId?: TabId } = {}): Promise<void> {
+    this.#connector.store.wipe(options.tabId);
+  }
+
+  async screenshot(options: { name?: string; tabId?: TabId }): Promise<ScreenshotResult> {
     return this.#connector.captureScreenshot(options);
   }
 
-  async refresh(): Promise<void> {
-    return this.#connector.refreshTab();
+  async refresh(options: { tabId?: TabId } = {}): Promise<void> {
+    return this.#connector.refreshTab(options);
   }
 
-  async storage(kinds: string[]): Promise<Record<string, unknown>> {
-    return this.#connector.readStorage(kinds);
+  async storage(
+    kinds: string[],
+    options: { tabId?: TabId } = {}
+  ): Promise<Record<string, unknown>> {
+    return this.#connector.readStorage(kinds, options);
   }
 
-  async audit(category: AuditCategory, options: { url?: string } = {}): Promise<AuditReport> {
+  async audit(
+    category: AuditCategory,
+    options: { url?: string; tabId?: TabId } = {}
+  ): Promise<AuditReport> {
     return this.#connector.runAudit(category, options);
   }
 }
@@ -164,17 +205,23 @@ export class HttpConnectorClient implements ConnectorClient {
     return payload as T;
   }
 
-  console(query: ConsoleQuery): Promise<QueryResult<ConsoleEntry>> {
+  console(query: ScopedConsoleQuery): Promise<TabScopedResult<ConsoleEntry>> {
     return this.#request("/api/console", { query: query as Record<string, unknown> });
   }
 
-  network(query: NetworkQuery): Promise<QueryResult<NetworkEntry>> {
+  network(query: ScopedNetworkQuery): Promise<TabScopedResult<NetworkEntry>> {
     return this.#request("/api/network", { query: query as Record<string, unknown> });
   }
 
-  async selectedElement(): Promise<unknown> {
-    const result = await this.#request<{ element: unknown }>("/api/selected-element");
+  async selectedElement(options: { tabId?: TabId } = {}): Promise<unknown> {
+    const result = await this.#request<{ element: unknown }>("/api/selected-element", {
+      query: options as Record<string, unknown>,
+    });
     return result.element;
+  }
+
+  tabs(): Promise<TabListing> {
+    return this.#request("/api/tabs");
   }
 
   page(): Promise<PageInfo> {
@@ -185,27 +232,33 @@ export class HttpConnectorClient implements ConnectorClient {
     return this.#request("/api/status");
   }
 
-  async wipe(): Promise<void> {
-    await this.#request("/api/wipe", { method: "POST", body: {} });
+  async wipe(options: { tabId?: TabId } = {}): Promise<void> {
+    await this.#request("/api/wipe", { method: "POST", body: options });
   }
 
-  screenshot(options: { name?: string }): Promise<ScreenshotResult> {
+  screenshot(options: { name?: string; tabId?: TabId }): Promise<ScreenshotResult> {
     return this.#request("/api/screenshot", { method: "POST", body: options });
   }
 
-  async refresh(): Promise<void> {
-    await this.#request("/api/refresh", { method: "POST", body: {} });
+  async refresh(options: { tabId?: TabId } = {}): Promise<void> {
+    await this.#request("/api/refresh", { method: "POST", body: options });
   }
 
-  async storage(kinds: string[]): Promise<Record<string, unknown>> {
+  async storage(
+    kinds: string[],
+    options: { tabId?: TabId } = {}
+  ): Promise<Record<string, unknown>> {
     const result = await this.#request<{ storage: Record<string, unknown> }>("/api/storage", {
       method: "POST",
-      body: { kinds },
+      body: { kinds, ...options },
     });
     return result.storage;
   }
 
-  audit(category: AuditCategory, options: { url?: string } = {}): Promise<AuditReport> {
+  audit(
+    category: AuditCategory,
+    options: { url?: string; tabId?: TabId } = {}
+  ): Promise<AuditReport> {
     return this.#request(`/api/audit/${category}`, { method: "POST", body: options });
   }
 }

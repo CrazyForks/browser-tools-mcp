@@ -70,6 +70,7 @@ describe("tool registration", () => {
         "getNetworkLogs",
         "getPageInfo",
         "getSelectedElement",
+        "listBrowserTabs",
         "refreshBrowser",
         "runAccessibilityAudit",
         "runBestPracticesAudit",

@@ -6,11 +6,15 @@ import {
 import { redactHeaders, redactSecretsInString, redactValue } from "../util/redact.js";
 import { selectLogsWithinBudget, truncateStringsInData } from "../util/truncate.js";
 
+export type TabId = number | string;
+
 export interface ConsoleEntry {
   type: string;
   level: string;
   message: string;
   timestamp: number;
+  /** The browser tab this came from, when known. */
+  tabId?: TabId | null;
   url?: string;
   stackTrace?: unknown;
 }
@@ -21,6 +25,7 @@ export interface NetworkEntry {
   method: string;
   status: number;
   timestamp: number;
+  tabId?: TabId | null;
   durationMs?: number;
   error?: string;
   requestHeaders?: Record<string, string>;
@@ -35,7 +40,7 @@ export interface SelectedElement {
 
 export interface PageState {
   url: string;
-  tabId: number | string | null;
+  tabId: TabId | null;
 }
 
 export interface QueryResult<T> {
@@ -51,6 +56,8 @@ export interface QueryResult<T> {
 export interface ConsoleQuery {
   errorsOnly?: boolean;
   keywords?: string[];
+  /** Restrict to one tab. Omit to read across every tab. */
+  tabId?: TabId;
   limit?: number;
   offset?: number;
 }
@@ -59,6 +66,7 @@ export interface NetworkQuery {
   errorsOnly?: boolean;
   urlKeywords?: string[];
   bodyKeywords?: string[];
+  tabId?: TabId;
   limit?: number;
   offset?: number;
 }
@@ -71,8 +79,20 @@ export interface TelemetryStoreOptions {
 
 const ERROR_LEVELS = new Set(["error", "assert", "critical"]);
 
+/** Entries with no tab attribution share one bucket. */
+const UNATTRIBUTED = "__no-tab__";
+
+function tabKey(tabId: TabId | null | undefined): string {
+  return tabId === null || tabId === undefined ? UNATTRIBUTED : String(tabId);
+}
+
 /**
  * In-memory telemetry captured from the browser.
+ *
+ * Entries are attributed to the tab that produced them, because DevTools can be
+ * open on several tabs at once and merging their output leaves an agent unable
+ * to tell which page it is looking at. Retention is per tab too, so a noisy tab
+ * cannot evict a quiet one's history.
  *
  * Everything is scrubbed and size-capped on the way in, so nothing downstream
  * has to remember to do it, and a hostile page cannot grow the process without
@@ -83,7 +103,8 @@ export class TelemetryStore {
   #redact: boolean;
   #console: ConsoleEntry[] = [];
   #network: NetworkEntry[] = [];
-  #selectedElement: SelectedElement | null = null;
+  #selectedElements = new Map<string, SelectedElement>();
+  #lastSelectedTab: string = UNATTRIBUTED;
   #page: PageState = { url: "", tabId: null };
 
   constructor(options: TelemetryStoreOptions = {}) {
@@ -97,13 +118,13 @@ export class TelemetryStore {
 
   updateSettings(patch: unknown): CaptureSettings {
     this.#settings = mergeSettings(this.#settings, patch);
-    this.#evict();
+    this.#evictAll();
     return this.#settings;
   }
 
   // ---------------------------------------------------------------- ingest
 
-  addConsole(raw: unknown): ConsoleEntry | null {
+  addConsole(raw: unknown, tabId?: TabId | null): ConsoleEntry | null {
     const source = asRecord(raw);
     if (!source) return null;
 
@@ -113,6 +134,7 @@ export class TelemetryStore {
       level,
       message: this.#clean(coerceMessage(source["message"])),
       timestamp: asTimestamp(source["timestamp"]),
+      tabId: resolveTabId(tabId, source["tabId"]),
     };
 
     const url = asString(source["url"]);
@@ -123,11 +145,11 @@ export class TelemetryStore {
     }
 
     this.#console.push(entry);
-    this.#evict();
+    this.#evictTab(this.#console, tabKey(entry.tabId));
     return entry;
   }
 
-  addNetwork(raw: unknown): NetworkEntry | null {
+  addNetwork(raw: unknown, tabId?: TabId | null): NetworkEntry | null {
     const source = asRecord(raw);
     if (!source) return null;
 
@@ -137,6 +159,7 @@ export class TelemetryStore {
       method: asString(source["method"]) || "GET",
       status: asNumber(source["status"]),
       timestamp: asTimestamp(source["timestamp"]),
+      tabId: resolveTabId(tabId, source["tabId"]),
     };
 
     const duration = asNumber(source["durationMs"] ?? source["duration"]);
@@ -166,19 +189,25 @@ export class TelemetryStore {
     }
 
     this.#network.push(entry);
-    this.#evict();
+    this.#evictTab(this.#network, tabKey(entry.tabId));
     return entry;
   }
 
-  setSelectedElement(element: unknown): void {
+  setSelectedElement(element: unknown, tabId?: TabId | null): void {
+    const key = tabKey(tabId);
     const record = asRecord(element);
-    this.#selectedElement = record
-      ? (this.#cleanValue(record) as SelectedElement)
-      : null;
+    if (!record) {
+      this.#selectedElements.delete(key);
+      return;
+    }
+    this.#selectedElements.set(key, this.#cleanValue(record) as SelectedElement);
+    this.#lastSelectedTab = key;
   }
 
-  getSelectedElement(): SelectedElement | null {
-    return this.#selectedElement;
+  /** The element selected in a given tab, or the most recent one overall. */
+  getSelectedElement(tabId?: TabId | null): SelectedElement | null {
+    const key = tabId === undefined ? this.#lastSelectedTab : tabKey(tabId);
+    return this.#selectedElements.get(key) ?? null;
   }
 
   setCurrentPage(page: { url?: unknown; tabId?: unknown }): void {
@@ -194,10 +223,20 @@ export class TelemetryStore {
     return { ...this.#page };
   }
 
-  wipe(): void {
-    this.#console = [];
-    this.#network = [];
-    this.#selectedElement = null;
+  /** Clears one tab's telemetry, or everything when no tab is named. */
+  wipe(tabId?: TabId | null): void {
+    if (tabId === undefined || tabId === null) {
+      this.#console = [];
+      this.#network = [];
+      this.#selectedElements.clear();
+      this.#lastSelectedTab = UNATTRIBUTED;
+      return;
+    }
+
+    const key = tabKey(tabId);
+    this.#console = this.#console.filter((entry) => tabKey(entry.tabId) !== key);
+    this.#network = this.#network.filter((entry) => tabKey(entry.tabId) !== key);
+    this.#selectedElements.delete(key);
   }
 
   // ----------------------------------------------------------------- query
@@ -205,6 +244,10 @@ export class TelemetryStore {
   queryConsole(query: ConsoleQuery): QueryResult<ConsoleEntry> {
     let matched = this.#console;
 
+    if (query.tabId !== undefined) {
+      const key = tabKey(query.tabId);
+      matched = matched.filter((e) => tabKey(e.tabId) === key);
+    }
     if (query.errorsOnly) {
       matched = matched.filter((e) => ERROR_LEVELS.has(e.level));
     }
@@ -218,6 +261,10 @@ export class TelemetryStore {
   queryNetwork(query: NetworkQuery): QueryResult<NetworkEntry> {
     let matched = this.#network;
 
+    if (query.tabId !== undefined) {
+      const key = tabKey(query.tabId);
+      matched = matched.filter((e) => tabKey(e.tabId) === key);
+    }
     if (query.errorsOnly) {
       matched = matched.filter(isNetworkError);
     }
@@ -233,6 +280,17 @@ export class TelemetryStore {
     const result = this.#paginate(matched, query.limit, query.offset);
     result.entries = result.entries.map((entry) => this.#applyHeaderVisibility(entry));
     return result;
+  }
+
+  /** Tabs that have produced telemetry, newest activity first. */
+  knownTabs(): TabId[] {
+    const seen = new Map<string, TabId>();
+    for (const entry of [...this.#console, ...this.#network]) {
+      if (entry.tabId !== null && entry.tabId !== undefined) {
+        seen.set(tabKey(entry.tabId), entry.tabId);
+      }
+    }
+    return [...seen.values()];
   }
 
   // --------------------------------------------------------------- private
@@ -268,13 +326,27 @@ export class TelemetryStore {
     return out;
   }
 
-  #evict(): void {
+  /**
+   * Trims one tab's entries to the log limit, walking newest-first so the
+   * oldest go. Retention is per tab so a chatty page cannot push out the
+   * history of a quiet one the user actually cares about.
+   */
+  #evictTab(list: Array<{ tabId?: TabId | null }>, key: string): void {
     const limit = this.#settings.logLimit;
-    if (this.#console.length > limit) {
-      this.#console = this.#console.slice(-limit);
+    let seen = 0;
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (tabKey(list[i]?.tabId) !== key) continue;
+      seen += 1;
+      if (seen > limit) list.splice(i, 1);
     }
-    if (this.#network.length > limit) {
-      this.#network = this.#network.slice(-limit);
+  }
+
+  #evictAll(): void {
+    for (const list of [this.#console, this.#network] as Array<
+      Array<{ tabId?: TabId | null }>
+    >) {
+      const keys = new Set(list.map((entry) => tabKey(entry.tabId)));
+      for (const key of keys) this.#evictTab(list, key);
     }
   }
 
@@ -307,6 +379,12 @@ export class TelemetryStore {
 }
 
 // -------------------------------------------------------------- helpers
+
+function resolveTabId(explicit: TabId | null | undefined, fromPayload: unknown): TabId | null {
+  if (explicit !== undefined && explicit !== null) return explicit;
+  if (typeof fromPayload === "number" || typeof fromPayload === "string") return fromPayload;
+  return null;
+}
 
 function isNetworkError(entry: NetworkEntry): boolean {
   return Boolean(entry.error) || entry.status >= 400 || entry.status === 0;

@@ -51,7 +51,37 @@ const queryOutputShape = {
   total: z.number().int().describe("Entries matching the filter before paging"),
   returned: z.number().int().describe("Entries actually included"),
   truncated: z.boolean().describe("True when some matching entries were withheld"),
+  tabId: z
+    .union([z.number(), z.string()])
+    .nullable()
+    .describe("The tab these entries came from, or null when reading every tab"),
+  url: z.string().describe("The page that tab is on"),
+  otherTabs: z
+    .number()
+    .int()
+    .describe("Connected tabs NOT covered here. If above 0, call listBrowserTabs."),
 };
+
+/**
+ * Deliberately a numeric/string id rather than a name or url fragment: two tabs
+ * can sit on the same url, and a substring selector silently retargets when a
+ * page navigates.
+ */
+const tabIdInput = z
+  .union([z.number().int(), z.string()])
+  .optional()
+  .describe(
+    "Which browser tab to use, from listBrowserTabs. Omit to use the current tab — the " +
+      "one DevTools was most recently opened on, which is right in almost every session. " +
+      "Only pass this when a result reported otherTabs above 0 and you need a specific tab."
+  );
+
+const allTabsInput = z
+  .boolean()
+  .optional()
+  .describe("Read every connected tab at once instead of just the current one.");
+
+const tabScopeInputShape = { tabId: tabIdInput, allTabs: allTabsInput };
 
 const pagingInputShape = {
   limit: z.number().int().min(1).max(1000).optional().describe("Maximum entries to return"),
@@ -102,6 +132,7 @@ function auditTool(
               .string()
               .optional()
               .describe("Page to audit. Defaults to the page currently open in the browser."),
+            tabId: tabIdInput,
           },
           outputSchema: auditOutputShape,
           annotations: {
@@ -112,9 +143,12 @@ function auditTool(
             openWorldHint: true,
           },
         },
-        async ({ url }) => {
+        async ({ url, tabId }) => {
           try {
-            const report = await client.audit(category, url ? { url } : {});
+            const report = await client.audit(category, {
+              ...(url ? { url } : {}),
+              ...(tabId !== undefined ? { tabId } : {}),
+            });
             return ok(report as unknown as Record<string, unknown>);
           } catch (error) {
             return fail(error);
@@ -127,6 +161,40 @@ function auditTool(
 
 const TOOLS: ToolDefinition[] = [
   {
+    name: "listBrowserTabs",
+    register(server, client) {
+      server.registerTool(
+        "listBrowserTabs",
+        {
+          title: "List browser tabs",
+          description:
+            "Every browser tab that currently has DevTools open, with the tabId you can pass to any other tool. " +
+            "Call this when a result reported otherTabs above 0, or when the user mentions a page other than the one you have been reading. " +
+            "The tab marked isCurrent is the one every other tool uses when you do not pass tabId.",
+          outputSchema: {
+            tabs: z.array(z.record(z.string(), z.unknown())),
+            currentTabId: z.union([z.number(), z.string()]).nullable(),
+            connectedTabs: z.number().int(),
+          },
+          annotations: {
+            title: "List browser tabs",
+            readOnlyHint: true,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+        },
+        async () => {
+          try {
+            return ok((await client.tabs()) as unknown as Record<string, unknown>);
+          } catch (error) {
+            return fail(error);
+          }
+        }
+      );
+    },
+  },
+  {
     name: "getConsoleLogs",
     register(server, client) {
       server.registerTool(
@@ -134,8 +202,8 @@ const TOOLS: ToolDefinition[] = [
         {
           title: "Get console logs",
           description:
-            "Console output captured from the page currently open in the browser. Use keywords and limit to keep responses small — an unfiltered read can be large.",
-          inputSchema: { keywords: keywordInput, ...pagingInputShape },
+            "Console output from the current tab. Use keywords and limit to keep responses small — an unfiltered read can be large. Pass tabId for a different tab, or allTabs to read every tab; the result reports which tab it came from.",
+          inputSchema: { keywords: keywordInput, ...tabScopeInputShape, ...pagingInputShape },
           outputSchema: queryOutputShape,
           annotations: {
             title: "Get console logs",
@@ -147,7 +215,7 @@ const TOOLS: ToolDefinition[] = [
         },
         async (args) => {
           try {
-            return ok(await client.console({ ...args }) as unknown as Record<string, unknown>);
+            return ok((await client.console({ ...args })) as unknown as Record<string, unknown>);
           } catch (error) {
             return fail(error);
           }
@@ -163,8 +231,8 @@ const TOOLS: ToolDefinition[] = [
         {
           title: "Get console errors",
           description:
-            "Only error-level console output and uncaught exceptions from the current page. Start here when diagnosing a failure.",
-          inputSchema: { keywords: keywordInput, ...pagingInputShape },
+            "Only error-level console output and uncaught exceptions from the current tab. Start here when diagnosing a failure. Pass tabId for a different tab, or allTabs to read every tab.",
+          inputSchema: { keywords: keywordInput, ...tabScopeInputShape, ...pagingInputShape },
           outputSchema: queryOutputShape,
           annotations: {
             title: "Get console errors",
@@ -194,13 +262,14 @@ const TOOLS: ToolDefinition[] = [
         {
           title: "Get network requests",
           description:
-            "XHR and fetch requests captured from the current page, including status and timing. Credential headers are redacted.",
+            "XHR and fetch requests from the current tab, including status and timing. Credential headers are redacted. Pass tabId for a different tab, or allTabs to read every tab.",
           inputSchema: {
             urlKeywords: z.array(z.string()).optional().describe("Match against the request URL"),
             bodyKeywords: z
               .array(z.string())
               .optional()
               .describe("Match against the request or response body"),
+            ...tabScopeInputShape,
             ...pagingInputShape,
           },
           outputSchema: queryOutputShape,
@@ -233,6 +302,7 @@ const TOOLS: ToolDefinition[] = [
             "Only requests that failed or returned a 4xx/5xx status. An empty result means there were no failures, which is a success, not an error.",
           inputSchema: {
             urlKeywords: z.array(z.string()).optional().describe("Match against the request URL"),
+            ...tabScopeInputShape,
             ...pagingInputShape,
           },
           outputSchema: queryOutputShape,
@@ -265,6 +335,7 @@ const TOOLS: ToolDefinition[] = [
           title: "Get selected element",
           description:
             "The DOM element the user has selected in the Chrome DevTools Elements panel, with its attributes and markup.",
+          inputSchema: { tabId: tabIdInput },
           outputSchema: { element: z.record(z.string(), z.unknown()).nullable() },
           annotations: {
             title: "Get selected element",
@@ -274,9 +345,11 @@ const TOOLS: ToolDefinition[] = [
             openWorldHint: false,
           },
         },
-        async () => {
+        async ({ tabId }) => {
           try {
-            const element = (await client.selectedElement()) as Record<string, unknown> | null;
+            const element = (await client.selectedElement(
+              tabId !== undefined ? { tabId } : {}
+            )) as Record<string, unknown> | null;
             return ok({ element });
           } catch (error) {
             return fail(error);
@@ -293,11 +366,15 @@ const TOOLS: ToolDefinition[] = [
         {
           title: "Get current page",
           description:
-            "Which page the browser is currently on. Call this before reading telemetry so you know what the logs describe.",
+            "Which page the browser is currently on. Call this before reading telemetry so you know what the logs describe. If connectedTabs is above 1, call listBrowserTabs before assuming this is the page the user means.",
           outputSchema: {
             url: z.string(),
             tabId: z.union([z.number(), z.string()]).nullable(),
             extensionConnected: z.boolean(),
+            connectedTabs: z
+              .number()
+              .int()
+              .describe("How many tabs have DevTools open. Above 1 means other pages exist."),
           },
           annotations: {
             title: "Get current page",
@@ -330,6 +407,8 @@ const TOOLS: ToolDefinition[] = [
             version: z.string(),
             extensionConnected: z.boolean(),
             connections: z.number().int(),
+            tabs: z.number().int(),
+            currentTabId: z.union([z.number(), z.string()]).nullable(),
             screenshotDir: z.string(),
             counts: z.record(z.string(), z.number()),
           },
@@ -359,12 +438,13 @@ const TOOLS: ToolDefinition[] = [
         {
           title: "Take a screenshot",
           description:
-            "Captures the visible area of the inspected tab and returns the image directly, plus the path it was saved to.",
+            "Captures the visible area of the current tab and returns the image directly, plus the path it was saved to and the url captured. Pass tabId to capture a different tab.",
           inputSchema: {
             name: z
               .string()
               .optional()
               .describe("Filename to save as, relative to the screenshot directory"),
+            tabId: tabIdInput,
           },
           outputSchema: {
             path: z.string(),
@@ -372,6 +452,8 @@ const TOOLS: ToolDefinition[] = [
             mimeType: z.string(),
             bytes: z.number().int(),
             imageIncluded: z.boolean(),
+            tabId: z.union([z.number(), z.string()]).nullable(),
+            url: z.string().describe("The page captured — check this is the one you meant"),
           },
           annotations: {
             title: "Take a screenshot",
@@ -381,9 +463,12 @@ const TOOLS: ToolDefinition[] = [
             openWorldHint: false,
           },
         },
-        async ({ name }) => {
+        async ({ name, tabId }) => {
           try {
-            const result = await client.screenshot(name ? { name } : {});
+            const result = await client.screenshot({
+              ...(name ? { name } : {}),
+              ...(tabId !== undefined ? { tabId } : {}),
+            });
             const base64 = result.data.replace(/^data:[^;]+;base64,/, "");
             const structured = {
               path: result.path,
@@ -391,6 +476,8 @@ const TOOLS: ToolDefinition[] = [
               mimeType: result.mimeType,
               bytes: result.bytes,
               imageIncluded: result.withinBudget,
+              tabId: result.tabId ?? null,
+              url: result.url ?? "",
             };
 
             // An oversized image is left on disk rather than inlined: it would
@@ -426,6 +513,7 @@ const TOOLS: ToolDefinition[] = [
           title: "Reload the page",
           description:
             "Reloads the inspected tab. Useful for capturing a clean reproduction after calling wipeLogs.",
+          inputSchema: { tabId: tabIdInput },
           outputSchema: { ok: z.boolean() },
           annotations: {
             title: "Reload the page",
@@ -435,9 +523,9 @@ const TOOLS: ToolDefinition[] = [
             openWorldHint: false,
           },
         },
-        async () => {
+        async ({ tabId }) => {
           try {
-            await client.refresh();
+            await client.refresh(tabId !== undefined ? { tabId } : {});
             return ok({ ok: true });
           } catch (error) {
             return fail(error);
@@ -466,6 +554,7 @@ const TOOLS: ToolDefinition[] = [
               .describe(
                 "Return the actual values. Only set this when the user has asked for them — these are credentials."
               ),
+            tabId: tabIdInput,
           },
           outputSchema: {
             storage: z.record(z.string(), z.unknown()),
@@ -479,10 +568,10 @@ const TOOLS: ToolDefinition[] = [
             openWorldHint: false,
           },
         },
-        async ({ kinds, includeValues }) => {
+        async ({ kinds, includeValues, tabId }) => {
           try {
             const requested = kinds?.length ? kinds : ["localStorage", "sessionStorage"];
-            const raw = await client.storage(requested);
+            const raw = await client.storage(requested, tabId !== undefined ? { tabId } : {});
             return ok({
               storage: includeValues ? raw : summariseStorage(raw),
               includedValues: Boolean(includeValues),
@@ -502,7 +591,8 @@ const TOOLS: ToolDefinition[] = [
         {
           title: "Clear captured telemetry",
           description:
-            "Discards all captured console and network entries. Use before reproducing a problem so the next read contains only relevant output.",
+            "Discards captured console and network entries for every tab, or one tab if you name it. Use before reproducing a problem so the next read contains only relevant output.",
+          inputSchema: { tabId: tabIdInput },
           outputSchema: { ok: z.boolean() },
           annotations: {
             title: "Clear captured telemetry",
@@ -512,9 +602,9 @@ const TOOLS: ToolDefinition[] = [
             openWorldHint: false,
           },
         },
-        async () => {
+        async ({ tabId }) => {
           try {
-            await client.wipe();
+            await client.wipe(tabId !== undefined ? { tabId } : {});
             return ok({ ok: true });
           } catch (error) {
             return fail(error);

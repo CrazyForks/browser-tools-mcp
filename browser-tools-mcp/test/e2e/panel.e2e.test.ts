@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import crypto from "node:crypto";
 import { chromium, type BrowserContext, type Page } from "playwright";
 
 /**
@@ -66,26 +67,25 @@ function bridgeStub(settings: Record<string, unknown>) {
   `;
 }
 
-async function extensionIdFrom(context: BrowserContext): Promise<string> {
-  const probe = await context.newPage();
-  await probe.goto("data:text/html,<title>probe</title>");
-  await probe.waitForTimeout(2000);
-
-  const cdp = await context.newCDPSession(probe);
-  const { targetInfos } = (await cdp.send("Target.getTargets")) as {
-    targetInfos: Array<{ url: string }>;
-  };
-  await probe.close();
-
-  for (const target of targetInfos) {
-    const match = /^chrome-extension:\/\/([a-p]{32})\//.exec(target.url);
-    if (match?.[1]) return match[1];
+/**
+ * Chrome derives an unpacked extension's id from the SHA-256 of its absolute
+ * path, mapping each nibble onto a-p.
+ *
+ * Computing it beats discovering it from a devtools target, because this test
+ * can then run with DevTools closed. With --auto-open-devtools-for-tabs the
+ * extension's devtools page attaches to every tab — including panel.html — and
+ * connects to whatever connector is listening, polluting the other end-to-end
+ * suite's tab registry.
+ */
+function unpackedExtensionId(absolutePath: string): string {
+  const hash = crypto.createHash("sha256").update(absolutePath).digest();
+  let id = "";
+  for (let i = 0; i < 16; i++) {
+    const byte = hash[i]!;
+    id += String.fromCharCode(97 + (byte >> 4));
+    id += String.fromCharCode(97 + (byte & 0xf));
   }
-  throw new Error(
-    `Could not determine the extension id. Targets seen:\n${targetInfos
-      .map((t) => t.url)
-      .join("\n")}`
-  );
+  return id;
 }
 
 beforeAll(async () => {
@@ -95,13 +95,18 @@ beforeAll(async () => {
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
-      // Loads the extension's devtools page, which makes its origin discoverable.
-      "--auto-open-devtools-for-tabs",
       "--no-first-run",
       "--no-default-browser-check",
     ],
   });
-  extensionId = await extensionIdFrom(context);
+  extensionId = unpackedExtensionId(extensionPath);
+
+  // Fail loudly if Chrome ever changes how it derives unpacked ids, rather
+  // than silently testing a page that does not exist.
+  const probe = await context.newPage();
+  const response = await probe.goto(`chrome-extension://${extensionId}/panel.html`);
+  expect(response?.status(), "extension id derivation is stale").toBeLessThan(400);
+  await probe.close();
 }, 180_000);
 
 afterAll(async () => {

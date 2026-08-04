@@ -57,6 +57,9 @@ class UnavailableConnectorClient implements ConnectorClient {
   status(): Promise<never> {
     return this.#fail();
   }
+  tabs(): Promise<never> {
+    return this.#fail();
+  }
   wipe(): Promise<never> {
     return this.#fail();
   }

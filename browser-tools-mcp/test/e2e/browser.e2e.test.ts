@@ -21,10 +21,9 @@ import { waitForPortFree } from "../helpers/port";
  * same port races the first — which produced tests that passed alone and failed
  * together. One browser, one connector, one tab for the whole suite.
  *
- * One tab matters too: every tab gets DevTools under
- * --auto-open-devtools-for-tabs, and the connector treats the most recently
- * connected or navigated DevTools page as current, so extra tabs make it
- * ambiguous which page a screenshot targets.
+ * Most tests use a single tab so that "the current tab" is unambiguous without
+ * naming it. The final block opens a second tab on purpose, to prove targeting
+ * works when it is ambiguous.
  */
 
 const extensionPath = path.resolve(
@@ -455,4 +454,75 @@ describe("screenshot byte budget", () => {
     expect(result.bytes).toBeLessThanOrEqual(3_000_000);
     expect(result.data.length).toBeLessThan(10 * 1024 * 1024);
   }, 180_000);
+});
+
+// --------------------------------------------------------------- multi-tab
+
+describe("two real tabs", () => {
+  /**
+   * The rest of this file deliberately uses one tab. This is the case that
+   * used to be broken: with DevTools open on two tabs, telemetry and
+   * screenshots followed whichever tab most recently connected or navigated.
+   */
+  let second: Page | null = null;
+
+  afterAll(async () => {
+    await second?.close().catch(() => {});
+    second = null;
+  });
+
+  it("registers both tabs with distinct ids and urls", async () => {
+    await loadPage();
+
+    second = await context!.newPage();
+    await second.goto(`${fixture.url}noise`, { waitUntil: "load" });
+
+    const tabs = await waitFor(
+      () => connector.listTabs(),
+      (list) => list.length === 2 && list.every((tab) => tab.url.length > 0)
+    );
+
+    const ids = tabs.map((tab) => tab.tabId);
+    expect(new Set(ids).size).toBe(2);
+    expect(tabs.some((tab) => tab.url.endsWith("/index.html"))).toBe(true);
+    expect(tabs.some((tab) => tab.url.endsWith("/noise"))).toBe(true);
+    expect(tabs.filter((tab) => tab.isCurrent)).toHaveLength(1);
+  }, 180_000);
+
+  it("attributes each tab's console output to that tab", async () => {
+    const tabs = await waitFor(
+      () => connector.listTabs(),
+      (list) => list.length === 2 && list.every((tab) => tab.url.length > 0)
+    );
+    const fixtureTab = tabs.find((tab) => tab.url.endsWith("/index.html"))!;
+    const noiseTab = tabs.find((tab) => tab.url.endsWith("/noise"))!;
+
+    await waitFor(
+      () => connector.store.queryConsole({ tabId: fixtureTab.tabId }),
+      (r) => r.entries.some((e) => e.message.includes("MARKER-CONSOLE-LOG"))
+    );
+
+    // The noise page logs its own marker and never the fixture's.
+    const noiseLogs = connector.store.queryConsole({ tabId: noiseTab.tabId });
+    expect(noiseLogs.entries.some((e) => e.message.includes("MARKER-CONSOLE-LOG"))).toBe(false);
+  }, 180_000);
+
+  it("screenshots the tab it was told to, not the most recent one", async () => {
+    const tabs = await waitFor(
+      () => connector.listTabs(),
+      (list) => list.length === 2 && list.every((tab) => tab.url.length > 0)
+    );
+    const fixtureTab = tabs.find((tab) => tab.url.endsWith("/index.html"))!;
+
+    connector.store.updateSettings({ screenshotMaxBytes: 9_000_000 });
+    const result = await connector.captureScreenshot({ tabId: fixtureTab.tabId });
+
+    expect(result.tabId).toBe(fixtureTab.tabId);
+    expect(result.url.endsWith("/index.html")).toBe(true);
+    expect(fs.existsSync(result.path)).toBe(true);
+  }, 180_000);
+
+  it("refuses an unknown tab instead of falling back to some other tab", async () => {
+    await expect(connector.captureScreenshot({ tabId: 999999 })).rejects.toThrow(/unknown tab/i);
+  }, 60_000);
 });
