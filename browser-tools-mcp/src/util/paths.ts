@@ -132,9 +132,9 @@ let filenameCounter = 0;
  * Builds a unique, sortable, shell-safe screenshot filename. Colons are
  * stripped so the name survives every platform and never needs quoting.
  */
-export function screenshotFilename(now: Date = new Date()): string {
+export function screenshotFilename(now: Date = new Date(), extension = "png"): string {
   const stamp = now.toISOString().replace(/:/g, "-");
   const counter = (filenameCounter++ % 0x1000).toString(16).padStart(3, "0");
   const random = crypto.randomBytes(2).toString("hex").slice(0, 3);
-  return `screenshot-${stamp}-${random}${counter}.png`;
+  return `screenshot-${stamp}-${random}${counter}.${extension}`;
 }

@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Screenshots are held to a byte budget.** A viewport capture of visually
+  dense content measured 13.3 MB of base64 on a 1440p retina display and
+  17.9 MB on an ultrawide — more than a model's context can take, and past the
+  10 MB read buffer newer MCP stdio transports enforce, which severs the
+  connection. The browser now degrades PNG to JPEG and then downscales until the
+  capture fits `screenshotMaxBytes` (3 MB by default, configurable). An image
+  that still cannot fit is written to disk and its path returned rather than
+  inlined.
+- Screenshots carry their real media type end to end, so a capture that fell
+  back to JPEG is saved as `.jpg` with JPEG bytes instead of being mislabelled
+  `.png`, and the MCP image block reports the correct `mimeType`.
+- The connector no longer waits on lingering sockets when shutting down, so its
+  port is released promptly instead of staying bound after `close()` resolves.
+
 ## 2.0.0
 
 A rewrite. See [MIGRATION.md](MIGRATION.md) to upgrade and [SECURITY.md](SECURITY.md)

@@ -65,6 +65,33 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       return;
     }
 
+    // Incompressible pixel noise: the worst case for PNG, used to prove the
+    // screenshot budget actually degrades format and scale.
+    if (url === "/noise") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(`<!doctype html><html><body style="margin:0">
+        <canvas id="c"></canvas>
+        <script>
+          const c = document.getElementById("c");
+          c.width = window.innerWidth * devicePixelRatio;
+          c.height = window.innerHeight * devicePixelRatio;
+          c.style.width = window.innerWidth + "px";
+          c.style.height = window.innerHeight + "px";
+          const ctx = c.getContext("2d");
+          const d = ctx.createImageData(c.width, c.height);
+          for (let i = 0; i < d.data.length; i += 4) {
+            d.data[i] = Math.random() * 255;
+            d.data[i + 1] = Math.random() * 255;
+            d.data[i + 2] = Math.random() * 255;
+            d.data[i + 3] = 255;
+          }
+          ctx.putImageData(d, 0, 0);
+          console.log("MARKER-NOISE-READY");
+        </script>
+      </body></html>`);
+      return;
+    }
+
     if (url === "/image.png") {
       res.writeHead(200, { "Content-Type": "image/png" });
       res.end(

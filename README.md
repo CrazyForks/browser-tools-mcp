@@ -153,6 +153,16 @@ it automatically.
 
 - Network capture starts when DevTools opens. Requests that finished before then
   are not recorded — reload the page to capture a full page load.
+- **With DevTools open on several tabs, telemetry and screenshots follow whichever
+  tab most recently connected or navigated.** There is no way to target a
+  specific tab yet. Keep DevTools open on the one tab you care about.
+- Screenshots are held to a byte budget (`screenshotMaxBytes`, 3 MB by default).
+  A capture that would exceed it is re-encoded as JPEG and, if still too large,
+  downscaled. A viewport capture of dense content on a high-DPI display can
+  otherwise run past 13 MB, which is more than a model's context can take and
+  past the read buffer newer MCP stdio transports enforce. If an image still
+  cannot fit, it is written to disk and the tool returns the path instead of
+  inlining it.
 - Console capture defaults to the DevTools protocol, which makes Chrome show a
   "started debugging this browser" banner. Switch the panel's capture mode to
   **Wrap page console** to avoid it; that mode is also what Firefox uses.

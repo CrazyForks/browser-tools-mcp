@@ -24,8 +24,13 @@ export interface ConnectorStatus {
 
 export interface ScreenshotResult {
   path: string;
+  /** Data URL, carrying whichever format the browser settled on. */
   data: string;
   name: string;
+  mimeType: string;
+  bytes: number;
+  /** False when the image is too large to hand to the model. */
+  withinBudget: boolean;
 }
 
 /**

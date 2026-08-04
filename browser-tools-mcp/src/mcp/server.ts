@@ -366,7 +366,13 @@ const TOOLS: ToolDefinition[] = [
               .optional()
               .describe("Filename to save as, relative to the screenshot directory"),
           },
-          outputSchema: { path: z.string(), name: z.string() },
+          outputSchema: {
+            path: z.string(),
+            name: z.string(),
+            mimeType: z.string(),
+            bytes: z.number().int(),
+            imageIncluded: z.boolean(),
+          },
           annotations: {
             title: "Take a screenshot",
             readOnlyHint: false,
@@ -378,9 +384,31 @@ const TOOLS: ToolDefinition[] = [
         async ({ name }) => {
           try {
             const result = await client.screenshot(name ? { name } : {});
-            const base64 = result.data.replace(/^data:image\/[a-zA-Z+]+;base64,/, "");
-            return ok({ path: result.path, name: result.name }, [
-              { type: "image", data: base64, mimeType: "image/png" },
+            const base64 = result.data.replace(/^data:[^;]+;base64,/, "");
+            const structured = {
+              path: result.path,
+              name: result.name,
+              mimeType: result.mimeType,
+              bytes: result.bytes,
+              imageIncluded: result.withinBudget,
+            };
+
+            // An oversized image is left on disk rather than inlined: it would
+            // swamp the context window, and newer MCP stdio transports drop the
+            // connection outright past their read buffer.
+            if (!result.withinBudget) {
+              return ok(structured, [
+                {
+                  type: "text",
+                  text:
+                    `The screenshot is ${Math.round(result.bytes / 1024)} KB, too large to include here. ` +
+                    `It was saved to ${result.path}. Lower screenshotMaxBytes or reduce the browser window size to get an inline image.`,
+                },
+              ]);
+            }
+
+            return ok(structured, [
+              { type: "image", data: base64, mimeType: result.mimeType },
             ]);
           } catch (error) {
             return fail(error);

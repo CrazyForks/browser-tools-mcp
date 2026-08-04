@@ -16,6 +16,12 @@ export interface CaptureSettings {
   stringSizeLimit: number;
   /** Maximum serialised size of a single captured entry. */
   maxLogSize: number;
+  /**
+   * Byte budget for a screenshot. The browser degrades format and scale until
+   * the capture fits, so an image never blows the client's context window or
+   * overruns the transport's read buffer.
+   */
+  screenshotMaxBytes: number;
   showRequestHeaders: boolean;
   showResponseHeaders: boolean;
 }
@@ -25,6 +31,9 @@ export const LIMITS = {
   queryLimit: { min: 1_000, max: 500_000, default: 30_000 },
   stringSizeLimit: { min: 100, max: 100_000, default: 500 },
   maxLogSize: { min: 1_000, max: 1_000_000, default: 20_000 },
+  // Ceiling stays under the 10 MB read buffer that newer MCP stdio transports
+  // enforce, so a screenshot can never sever the connection.
+  screenshotMaxBytes: { min: 50_000, max: 9_000_000, default: 3_000_000 },
 } as const;
 
 export const DEFAULT_SETTINGS: Readonly<CaptureSettings> = Object.freeze({
@@ -32,6 +41,7 @@ export const DEFAULT_SETTINGS: Readonly<CaptureSettings> = Object.freeze({
   queryLimit: LIMITS.queryLimit.default,
   stringSizeLimit: LIMITS.stringSizeLimit.default,
   maxLogSize: LIMITS.maxLogSize.default,
+  screenshotMaxBytes: LIMITS.screenshotMaxBytes.default,
   // Headers routinely carry credentials, so both default to off.
   showRequestHeaders: false,
   showResponseHeaders: false,
@@ -42,6 +52,7 @@ const NUMERIC_KEYS = [
   "queryLimit",
   "stringSizeLimit",
   "maxLogSize",
+  "screenshotMaxBytes",
 ] as const satisfies readonly (keyof typeof LIMITS)[];
 
 const BOOLEAN_KEYS = ["showRequestHeaders", "showResponseHeaders"] as const;

@@ -16,6 +16,12 @@ import {
   screenshotFilename,
   UnsafePathError,
 } from "../util/paths.js";
+import {
+  approximateBytes,
+  extensionForMimeType,
+  parseImageDataUrl,
+  withExtension,
+} from "../util/image.js";
 import { AuditError, runLighthouseAudit } from "../lighthouse/runner.js";
 import { isAuditCategory, type AuditCategory, type AuditReport } from "../lighthouse/types.js";
 
@@ -65,6 +71,17 @@ export interface ConnectorConfig {
   auditRunner?: (options: { url: string; category: AuditCategory }) => Promise<AuditReport>;
 }
 
+export interface ScreenshotCapture {
+  path: string;
+  /** Data URL, carrying whichever format the browser settled on. */
+  data: string;
+  name: string;
+  mimeType: string;
+  bytes: number;
+  /** False when the browser could not get the image under the byte budget. */
+  withinBudget: boolean;
+}
+
 export interface Connector {
   app: Express;
   server: http.Server;
@@ -74,7 +91,7 @@ export interface Connector {
   token: string;
   screenshotDir: string;
   hasExtension(): boolean;
-  captureScreenshot(options?: { name?: string }): Promise<{ path: string; data: string; name: string }>;
+  captureScreenshot(options?: { name?: string }): Promise<ScreenshotCapture>;
   refreshTab(): Promise<void>;
   readStorage(kinds: string[]): Promise<Record<string, unknown>>;
   runAudit(category: AuditCategory, options?: { url?: string }): Promise<AuditReport>;
@@ -456,21 +473,50 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
 
   async function captureScreenshot(
     options: { name?: string } = {}
-  ): Promise<{ path: string; data: string; name: string }> {
+  ): Promise<ScreenshotCapture> {
     // Validate the destination before involving the browser at all, so a bad
     // name can never reach the filesystem.
-    const filename = options.name ?? screenshotFilename();
-    const destination = resolveSafeScreenshotPath(screenshotDir, filename);
+    const requestedName = options.name ?? screenshotFilename();
+    resolveSafeScreenshotPath(screenshotDir, requestedName);
 
-    const response = await requestFromExtension("capture-screenshot", { name: filename });
-    const data = typeof response["data"] === "string" ? response["data"] : "";
-    const base64 = data.replace(/^data:image\/[a-zA-Z+]+;base64,/, "");
-    if (!base64) throw new ExtensionRequestError("The extension returned an empty screenshot");
+    const maxBytes = store.settings.screenshotMaxBytes;
+    const response = await requestFromExtension("capture-screenshot", {
+      name: requestedName,
+      maxBytes,
+    });
+
+    const parsed = parseImageDataUrl(
+      typeof response["data"] === "string" ? response["data"] : ""
+    );
+    if (!parsed) {
+      throw new ExtensionRequestError(
+        "The extension returned an empty or unsupported screenshot payload"
+      );
+    }
+
+    // The browser may have fallen back to JPEG to meet the budget, so the file
+    // is named for the bytes actually being written rather than what was asked for.
+    const finalName = withExtension(requestedName, extensionForMimeType(parsed.mimeType));
+    const destination = resolveSafeScreenshotPath(screenshotDir, finalName);
+    const bytes = approximateBytes(parsed.base64);
 
     await fs.promises.mkdir(path.dirname(destination), { recursive: true });
-    await fs.promises.writeFile(destination, Buffer.from(base64, "base64"));
+    await fs.promises.writeFile(destination, Buffer.from(parsed.base64, "base64"));
 
-    return { path: destination, data: `data:image/png;base64,${base64}`, name: filename };
+    if (bytes > maxBytes) {
+      log.warn(
+        `Screenshot is ${bytes} bytes, over the ${maxBytes} budget; it was saved to ${destination} but will not be inlined.`
+      );
+    }
+
+    return {
+      path: destination,
+      data: `data:${parsed.mimeType};base64,${parsed.base64}`,
+      name: finalName,
+      mimeType: parsed.mimeType,
+      bytes,
+      withinBudget: bytes <= maxBytes,
+    };
   }
 
   async function refreshTab(): Promise<void> {
@@ -533,6 +579,12 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
     connections.clear();
 
     await new Promise<void>((resolve) => wss.close(() => resolve()));
+
+    // server.close() only stops accepting new connections and then waits for
+    // existing ones to end. A browser that is still shutting down keeps
+    // reconnecting, so without this the port can stay bound long after close()
+    // resolves — or close() never resolves at all.
+    server.closeAllConnections?.();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 

@@ -6,7 +6,7 @@ _Audit date: 2026-07-30. Based on a full review of all 21 open PRs, 8 open issue
 
 ## Status: implemented on branch `revival/v2`
 
-Everything in P0-P4 below is built and tested. 250 tests pass and `npm audit`
+Everything in P0-P4 below is built and tested. 285 tests pass and `npm audit`
 reports zero vulnerabilities, down from 22.
 
 Test coverage spans: pure units; the connector's HTTP and WebSocket surface
@@ -16,6 +16,18 @@ Lighthouse audits against a real page; the injected console-capture mode; the
 DevTools panel UI loaded from the real extension origin; a real Chromium with
 the real extension loaded; and the full
 MCP client -> server -> connector -> extension -> page chain.
+
+Known gaps, in priority order:
+
+- **Multi-tab targeting is ambiguous.** With DevTools open on several tabs,
+  telemetry and screenshots follow whichever tab most recently connected or
+  navigated. There is no way to name a tab. This is the most likely source of
+  confusing behaviour in real use.
+- Three MCP protocol items from P3 are not built: resource links, Streamable
+  HTTP transport, and progress notifications. See the stateless-MCP assessment
+  for why none is urgent.
+- Screenshots accumulate with no retention policy; audits have no concurrency
+  limit.
 
 Still unverified by automation, and worth a manual pass: the extension running
 under Firefox, Windows and WSL, and installation via `npx` from a published

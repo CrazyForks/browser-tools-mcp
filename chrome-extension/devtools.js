@@ -477,6 +477,46 @@
    * "Cannot access contents of url devtools://". Page.captureScreenshot
    * targets the inspected page directly and needs no window focus.
    */
+
+  /**
+   * Progressively cheaper encodings, tried in order until one fits the budget.
+   *
+   * A full-viewport PNG on a high-DPI display runs to tens of megabytes of
+   * base64 — far more than a model's context can take, and past the read
+   * buffer newer MCP stdio transports enforce, which drops the connection.
+   */
+  const SCREENSHOT_ATTEMPTS = [
+    { format: "png" },
+    { format: "jpeg", quality: 85 },
+    { format: "jpeg", quality: 75, scale: 0.75 },
+    { format: "jpeg", quality: 65, scale: 0.5 },
+    { format: "jpeg", quality: 55, scale: 0.35 },
+  ];
+
+  function sendDebuggerCommand(method, params) {
+    return new Promise((resolve, reject) => {
+      api.debugger.sendCommand({ tabId }, method, params || {}, (result) => {
+        if (api.runtime.lastError) reject(new Error(api.runtime.lastError.message));
+        else resolve(result);
+      });
+    });
+  }
+
+  /** Viewport rectangle, used to downscale without changing the page itself. */
+  async function viewportClip(scale) {
+    try {
+      const metrics = await sendDebuggerCommand("Page.getLayoutMetrics");
+      const viewport = metrics.cssVisualViewport || metrics.cssLayoutViewport;
+      if (!viewport) return null;
+      const width = Math.round(viewport.clientWidth || 0);
+      const height = Math.round(viewport.clientHeight || 0);
+      if (!width || !height) return null;
+      return { x: 0, y: 0, width, height, scale };
+    } catch {
+      return null;
+    }
+  }
+
   async function captureScreenshot(message) {
     if (!debuggerAttached || !api.debugger) {
       respond(message.requestId, {
@@ -488,26 +528,53 @@
       return;
     }
 
-    api.debugger.sendCommand(
-      { tabId },
-      "Page.captureScreenshot",
-      { format: "png", captureBeyondViewport: false },
-      (result) => {
-        if (api.runtime.lastError || !result || !result.data) {
-          respond(message.requestId, {
-            type: "screenshot-result",
-            ok: false,
-            error: api.runtime.lastError?.message || "The browser returned no image data",
-          });
-          return;
+    const maxBytes =
+      Number(message.maxBytes) || Number(settings.screenshotMaxBytes) || 3000000;
+    // base64 inflates by 4/3, and the budget is expressed in decoded bytes.
+    const maxBase64 = Math.floor((maxBytes * 4) / 3);
+
+    try {
+      let best = null;
+
+      for (const attempt of SCREENSHOT_ATTEMPTS) {
+        const params = { format: attempt.format, captureBeyondViewport: false };
+        if (attempt.quality) params.quality = attempt.quality;
+        if (attempt.scale) {
+          const clip = await viewportClip(attempt.scale);
+          // Without a clip there is no way to downscale, so stop degrading.
+          if (!clip) break;
+          params.clip = clip;
         }
+
+        const result = await sendDebuggerCommand("Page.captureScreenshot", params);
+        if (!result || !result.data) continue;
+
+        best = { data: result.data, format: attempt.format };
+        if (result.data.length <= maxBase64) break;
+      }
+
+      if (!best) {
         respond(message.requestId, {
           type: "screenshot-result",
-          ok: true,
-          data: `data:image/png;base64,${result.data}`,
+          ok: false,
+          error: "The browser returned no image data",
         });
+        return;
       }
-    );
+
+      const mimeType = best.format === "jpeg" ? "image/jpeg" : "image/png";
+      respond(message.requestId, {
+        type: "screenshot-result",
+        ok: true,
+        data: `data:${mimeType};base64,${best.data}`,
+      });
+    } catch (error) {
+      respond(message.requestId, {
+        type: "screenshot-result",
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async function refreshTab(message) {
