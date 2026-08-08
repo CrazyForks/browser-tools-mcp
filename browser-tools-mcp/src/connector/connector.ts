@@ -82,6 +82,13 @@ export interface ConnectorConfig {
   maxBodySize?: string;
   /** Escape hatch, off by default, for users who knowingly expose the server. */
   allowNonLoopback?: boolean;
+  /**
+   * Print each captured entry as it arrives.
+   *
+   * Off by default: this is a debugging aid for confirming capture works, and
+   * on a busy page it is a lot of output.
+   */
+  verbose?: boolean;
   /** Injectable so audits can be exercised without launching a browser. */
   auditRunner?: (
     options: { url: string; category: AuditCategory },
@@ -204,6 +211,28 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
   const requestTimeoutMs = config.requestTimeoutMs ?? 10_000;
 
   const store = new TelemetryStore({ redact: config.redact !== false });
+  const verbose = config.verbose === true;
+
+  /**
+   * Reports a captured entry to the terminal.
+   *
+   * Goes through the logger, so it lands on stderr — the MCP server shares this
+   * process with the JSON-RPC stream on stdout, and a stray write there ends the
+   * session. Values are already redacted by the time they arrive.
+   */
+  function reportCapture(kind: "console" | "network", entry: unknown, tabId: TabId | null): void {
+    if (!verbose || !entry) return;
+    const where = tabId === null ? "" : ` tab ${tabId}`;
+
+    if (kind === "console") {
+      const e = entry as ConsoleEntry;
+      log.info(`· console ${e.level}${where} ${clip(e.message)}`);
+      return;
+    }
+    const e = entry as NetworkEntry;
+    const took = e.durationMs ? ` (${e.durationMs}ms)` : "";
+    log.info(`· network ${e.status || "---"} ${e.method}${where} ${clip(e.url)}${took}`);
+  }
 
   const connections = new Map<string, ExtensionConnection>();
   const pending = new Map<string, PendingRequest>();
@@ -789,10 +818,14 @@ export async function createConnector(config: ConnectorConfig = {}): Promise<Con
       // Attribution always comes from the connection, never the message body,
       // so one page cannot file its output against another tab.
       case "console":
-        for (const entry of asEntries(message)) store.addConsole(entry, connection.tabId);
+        for (const entry of asEntries(message)) {
+          reportCapture("console", store.addConsole(entry, connection.tabId), connection.tabId);
+        }
         break;
       case "network":
-        for (const entry of asEntries(message)) store.addNetwork(entry, connection.tabId);
+        for (const entry of asEntries(message)) {
+          reportCapture("network", store.addNetwork(entry, connection.tabId), connection.tabId);
+        }
         break;
       case "selected-element":
         store.setSelectedElement(message["element"], connection.tabId);
@@ -1092,6 +1125,12 @@ function rejectUpgrade(socket: Duplex, status: number, reason: string): void {
   } catch {
     /* socket already gone */
   }
+}
+
+/** Keeps one noisy entry from taking over the terminal. */
+function clip(value: string, limit = 160): string {
+  const flat = String(value ?? "").replace(/\s+/g, " ").trim();
+  return flat.length > limit ? `${flat.slice(0, limit)}…` : flat;
 }
 
 function asEntries(message: Record<string, unknown>): unknown[] {

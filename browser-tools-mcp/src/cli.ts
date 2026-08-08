@@ -14,6 +14,8 @@ export interface CliOptions {
   disabledTools?: string[];
   redact: boolean;
   standalone: boolean;
+  /** Print every captured entry as it arrives. */
+  verbose: boolean;
 }
 
 export function readPackageVersion(): string {
@@ -52,6 +54,7 @@ export function parseCli(argv: string[], env: NodeJS.ProcessEnv = process.env): 
     doctor: false,
     redact: env["BROWSER_TOOLS_REDACT"] !== "false",
     standalone: false,
+    verbose: env["BROWSER_TOOLS_VERBOSE"] === "true" || env["BROWSER_TOOLS_VERBOSE"] === "1",
     ...(numberOrUndefined(env["BROWSER_TOOLS_PORT"]) !== undefined
       ? { port: numberOrUndefined(env["BROWSER_TOOLS_PORT"]) }
       : {}),
@@ -90,6 +93,9 @@ export function parseCli(argv: string[], env: NodeJS.ProcessEnv = process.env): 
         break;
       case "--no-redact":
         options.redact = false;
+        break;
+      case "--verbose":
+        options.verbose = true;
         break;
       case "--port":
         options.port = numberOrUndefined(next());
@@ -148,12 +154,14 @@ Options:
       --exclude <a,b>      Hide these tools
       --connect <url>      Attach to a connector already running at this URL
       --token <t>          Auth token to use with --connect
+      --verbose            Print each captured console and network entry as it arrives
       --no-redact          Do not scrub credentials from captured data (not recommended)
 
 Environment:
   BROWSER_TOOLS_PORT, BROWSER_TOOLS_HOST, BROWSER_TOOLS_SCREENSHOT_DIR,
   BROWSER_TOOLS_TOOLS, BROWSER_TOOLS_EXCLUDE_TOOLS, BROWSER_TOOLS_TOKEN,
-  BROWSER_TOOLS_STATE_DIR, BROWSER_TOOLS_LOG_LEVEL, BROWSER_TOOLS_REDACT
+  BROWSER_TOOLS_STATE_DIR, BROWSER_TOOLS_LOG_LEVEL, BROWSER_TOOLS_REDACT,
+  BROWSER_TOOLS_VERBOSE
 
 Available tools:
   ${ALL_TOOL_NAMES.join(", ")}

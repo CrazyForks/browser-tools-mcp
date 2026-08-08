@@ -69,6 +69,21 @@ status. Then ask your agent something like *"check the console for errors"* or
 Not working? Run `npx @agentdeskai/browser-tools-mcp --doctor`, which reports
 exactly which piece is missing.
 
+To watch capture happen live — useful when checking a fresh install — start the
+connector with `--verbose`:
+
+```
+npx @agentdeskai/browser-tools-server --verbose
+```
+
+```
+· console error tab 42 Uncaught TypeError: total is not a function
+· network 500 POST tab 42 https://myapp.local/api/pay (1310ms)
+```
+
+Without it the connector only reports connect and disconnect, so a working
+setup and a silent one look the same.
+
 ## Tools
 
 | Tool | What it does |
@@ -176,6 +191,7 @@ Flags, or the matching `BROWSER_TOOLS_*` environment variables:
 | `--only <a,b>` | Expose only these tools |
 | `--exclude <a,b>` | Hide these tools |
 | `--doctor` | Check the setup and exit |
+| `--verbose` | Print each captured entry as it arrives |
 | `--no-redact` | Disable credential scrubbing (not recommended) |
 
 To share one browser session between several MCP clients, start the connector

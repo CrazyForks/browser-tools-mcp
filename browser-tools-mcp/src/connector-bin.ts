@@ -33,6 +33,7 @@ async function main(): Promise<void> {
         `      --port <n>           Port to listen on (default 3025)\n` +
         `      --host <addr>        Loopback address to bind (default 127.0.0.1)\n` +
         `      --screenshot-dir <p> Where screenshots are written\n` +
+        `      --verbose            Print each captured entry as it arrives\n` +
         `      --no-redact          Do not scrub credentials from captured data\n`
     );
     return;
@@ -44,6 +45,7 @@ async function main(): Promise<void> {
     ...(options.screenshotDir ? { screenshotDir: options.screenshotDir } : {}),
     ...(options.token ? { token: options.token } : {}),
     redact: options.redact,
+    verbose: options.verbose,
   });
 
   writeSessionFile({

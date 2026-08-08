@@ -151,6 +151,7 @@ export async function createRuntime(options: CliOptions): Promise<Runtime> {
       ...(options.screenshotDir ? { screenshotDir: options.screenshotDir } : {}),
       ...(options.token ? { token: options.token } : {}),
       redact: options.redact,
+      verbose: options.verbose,
     });
 
     writeSessionFile({

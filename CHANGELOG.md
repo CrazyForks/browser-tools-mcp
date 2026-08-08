@@ -4,6 +4,11 @@
 
 ### Added
 
+- **`--verbose` prints each captured entry as it arrives.** Without it the
+  connector reports only connect and disconnect, so there was no way to tell a
+  working capture from a silent one without querying the API. Output goes to
+  stderr, so it is safe to enable on the MCP server without corrupting the
+  JSON-RPC stream, and values are printed after redaction.
 - **Large payloads are MCP resources now, not inlined text.** Full console and
   network history, network traffic as a HAR 1.2 file, captured screenshots, and
   the unabridged Lighthouse result behind an audit summary are all readable at
