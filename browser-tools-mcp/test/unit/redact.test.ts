@@ -125,3 +125,69 @@ describe("redactValue", () => {
     expect(out.authorization).toBe("Bearer xyz");
   });
 });
+
+/**
+ * Regression tests from a real leak.
+ *
+ * Manual testing against a live Clerk-authenticated app found a JWT and four
+ * session ids surviving redaction. Two causes: the extension truncates strings
+ * before sending, so a long JWT arrived with only one of its three segments and
+ * no longer matched the JWT pattern; and there was no pattern for vendor
+ * session identifiers at all, which appeared in both response bodies and URL
+ * paths.
+ */
+describe("truncated secrets", () => {
+  it("redacts a JWT that lost its later segments to truncation", () => {
+    const chopped = "eyJhbGciOiJSUzI1NiIsImNhdCI6ImNsX0I3ZDRQZDRQZDRQIiwia2lkIjoiaW5zXzJa";
+    const out = redactSecretsInString(`token is ${chopped}... (truncated)`);
+
+    expect(out).not.toContain(chopped);
+    expect(out).toContain("[REDACTED]");
+  });
+
+  it("still redacts a complete three-segment JWT", () => {
+    const full = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r0";
+    expect(redactSecretsInString(full)).not.toContain(full);
+  });
+
+  it("does not mangle ordinary base64 that is not a token", () => {
+    // A short base64 blob in a log line should survive; only JWT-shaped
+    // payloads (which start with the encoded '{"') are worth destroying.
+    const text = "image data: iVBORw0KGgoAAAANSUhEUg";
+    expect(redactSecretsInString(text)).toBe(text);
+  });
+});
+
+describe("vendor session identifiers", () => {
+  const identifiers = [
+    ["Clerk session", "sess_3HWEvAAPLW3pElwMd0oolLs5aF7"],
+    ["Clerk client", "client_3GmhO0nHNv39mTjwcKR6AbTJW0F"],
+    ["generic token id", "tok_1PxyzABCDEFGHIJKLMNOPQRS"],
+  ];
+
+  for (const [label, value] of identifiers) {
+    it(`redacts a ${label}`, () => {
+      const out = redactSecretsInString(`{"id":"${value}","status":"active"}`);
+      expect(out, label).not.toContain(value);
+      expect(out).toContain("[REDACTED]");
+    });
+  }
+
+  it("redacts a session id embedded in a URL path", () => {
+    // This is where it actually leaked: the request URL itself.
+    const url =
+      "https://sweet-sloth-1.clerk.accounts.dev/v1/client/sessions/sess_3HWEvAAPLW3pElwMd0oolLs5aF7/touch?_clerk_js_version=6.26.0";
+    const out = redactSecretsInString(url);
+
+    expect(out).not.toContain("sess_3HWEvAAPLW3pElwMd0oolLs5aF7");
+    // The rest of the URL has to survive, or the log stops being useful.
+    expect(out).toContain("clerk.accounts.dev");
+    expect(out).toContain("/touch");
+  });
+
+  it("leaves short underscore-suffixed words alone", () => {
+    // Guard against over-matching ordinary identifiers.
+    const text = "user_id=42 and item_name=widget";
+    expect(redactSecretsInString(text)).toBe(text);
+  });
+});

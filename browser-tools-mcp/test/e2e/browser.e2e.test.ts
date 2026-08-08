@@ -202,6 +202,39 @@ describe("extension to connector", () => {
     expect(everything).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz0123456789");
   }, 180_000);
 
+  /**
+   * Regression from a real leak found in manual testing against a live
+   * Clerk-authenticated app: a JWT and four session ids reached the store.
+   * The JWT was longer than the truncation limit, so it arrived as a single
+   * segment and no longer matched the token pattern; session ids had no pattern
+   * at all and appeared in the request URL as well as the body.
+   */
+  it("scrubs auth tokens even when they are longer than the truncation limit", async () => {
+    await loadPage();
+
+    await waitFor(
+      () => connector.store.queryNetwork({}),
+      (r) => r.entries.some((e) => e.url.includes("/v1/client/sessions/"))
+    );
+
+    const captured = JSON.stringify({
+      console: connector.store.queryConsole({}),
+      network: connector.store.queryNetwork({}),
+      exportedConsole: connector.exportConsole({ allTabs: true }),
+      exportedNetwork: connector.exportNetwork({ allTabs: true }),
+    });
+
+    // The session id leaked through both the URL path and the response body.
+    expect(captured).not.toContain("sess_3HWEvAAPLW3pElwMd0oolLs5aF7");
+    expect(captured).not.toContain("client_3GmhO0nHNv39mTjwcKR6AbTJW0F");
+    // A JWT header survives truncation as a lone segment; it must still go.
+    expect(captured).not.toMatch(/eyJhbGciOiJSUzI1NiIsImNhdCI6/);
+    expect(captured).toContain("[REDACTED]");
+
+    // The request is still recognisable, or the log stops being useful.
+    expect(captured).toContain("/v1/client/sessions/");
+  }, 180_000);
+
   it("tracks the page the browser is on", async () => {
     await loadPage();
     expect(connector.store.getCurrentPage().url).toContain("127.0.0.1");

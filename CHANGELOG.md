@@ -21,6 +21,16 @@
 
 ### Fixed
 
+- **Credentials could survive redaction when they were longer than the
+  truncation limit.** Found by manual testing against a live
+  Clerk-authenticated app: a JWT and several session identifiers reached the
+  store intact. Two causes, both fixed. The extension truncated strings before
+  sending, so a token longer than `stringSizeLimit` arrived as a lone header
+  segment that no longer matched the JWT pattern; and there was no pattern for
+  vendor session identifiers at all, which appeared in request URLs as well as
+  response bodies. Scrubbing now happens **in the browser, before truncation**,
+  so secrets no longer cross the socket at all, and the server keeps its own
+  pass as defence in depth.
 - **A reconnecting background tab no longer steals targeting.** A tab that is
   timer-throttled, misses the heartbeat and reconnects looked identical to a
   user opening DevTools on a new tab, so it silently became the target of

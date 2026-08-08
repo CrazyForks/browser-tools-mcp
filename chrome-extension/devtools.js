@@ -231,10 +231,14 @@
     }
   }
 
+  /**
+   * Scrubs credentials, then shortens. Anything captured from the page goes
+   * through here, so a secret is redacted while still intact rather than after
+   * truncation has made it unrecognisable.
+   */
   function truncate(value) {
     const limit = Number(settings.stringSizeLimit) || 500;
-    if (typeof value !== "string") return value;
-    return value.length > limit ? value.slice(0, limit) + "... (truncated)" : value;
+    return scrubAndTruncate(value, limit);
   }
 
   function startCapture() {
@@ -391,7 +395,7 @@
 
     const entry = {
       type: "network-request",
-      url,
+      url: truncate(url),
       method: req.method || "GET",
       status: res.status || 0,
       timestamp: Date.now(),

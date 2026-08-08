@@ -171,3 +171,53 @@ const INJECT_DRAIN = `
     return out;
   })()
 `;
+
+/*
+ * Credential scrubbing, performed in the browser.
+ *
+ * The server scrubs too, but by then the data has already crossed a socket and
+ * been truncated. Truncation is what defeated detection in practice: a JWT cut
+ * at 500 characters arrives with only its header and no longer looks like a
+ * token. Scrubbing here, before anything is shortened, means a secret is
+ * matched while it is still whole and never leaves the page at all.
+ *
+ * Kept deliberately in step with src/util/redact.ts. Both run — this one to
+ * avoid transmitting secrets, that one as defence in depth for anything a
+ * different client sends.
+ */
+const BTMCP_REDACTED = "[REDACTED]";
+
+const BTMCP_SECRET_PATTERNS = [
+  /-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z]+ )?PRIVATE KEY-----/g,
+  // Later JWT segments are optional so a partial token still matches.
+  /\beyJ[A-Za-z0-9_-]{15,}(?:\.[A-Za-z0-9_-]+){0,2}/g,
+  /\b(?:sess|session|client|tok|token|auth|cred|secret|apikey)_[A-Za-z0-9]{16,}\b/gi,
+  /\b(?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA)[A-Z0-9]{16}\b/g,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
+  /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
+  /\bsk-(?:ant-)?[A-Za-z0-9_-]{20,}\b/g,
+  /\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{10,}\b/g,
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g,
+  /\bAIza[A-Za-z0-9_-]{35}\b/g,
+];
+
+const BTMCP_AUTH_SCHEME = /\b(Bearer|Basic|Token|Digest)\s+[A-Za-z0-9._~+/=-]{16,}/gi;
+
+const BTMCP_SECRETISH_KEY =
+  /("(?:[^"]*(?:password|passwd|secret|token|api[_-]?key|apikey|credential|private[_-]?key|auth)[^"]*)"\s*:\s*)"(?:[^"\\]|\\.)*"/gi;
+
+function scrubSecrets(value) {
+  if (typeof value !== "string" || value.length === 0) return value;
+  let out = value;
+  for (const pattern of BTMCP_SECRET_PATTERNS) out = out.replace(pattern, BTMCP_REDACTED);
+  out = out.replace(BTMCP_AUTH_SCHEME, (m, scheme) => scheme + " " + BTMCP_REDACTED);
+  out = out.replace(BTMCP_SECRETISH_KEY, (m, keyPart) => keyPart + '"' + BTMCP_REDACTED + '"');
+  return out;
+}
+
+/** Scrub first, then shorten — the order is what makes detection work. */
+function scrubAndTruncate(value, limit) {
+  if (typeof value !== "string") return value;
+  const scrubbed = scrubSecrets(value);
+  return scrubbed.length > limit ? scrubbed.slice(0, limit) + "... (truncated)" : scrubbed;
+}

@@ -41,8 +41,16 @@ const SENSITIVE_HEADER_SET = new Set(SENSITIVE_HEADERS);
 const SECRET_PATTERNS: readonly RegExp[] = [
   // PEM private key blocks (must run first — it spans lines).
   /-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z]+ )?PRIVATE KEY-----/g,
-  // JSON Web Tokens.
-  /eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}/g,
+  // JSON Web Tokens, including ones already cut short.
+  //
+  // The later segments are optional on purpose: the extension truncates long
+  // strings before sending, so a JWT frequently arrives with only its header.
+  // "eyJ" is base64 for '{"', which makes a long run starting that way a token
+  // rather than ordinary text.
+  /\beyJ[A-Za-z0-9_-]{15,}(?:\.[A-Za-z0-9_-]+){0,2}/g,
+  // Vendor session and client identifiers, e.g. Clerk's sess_… and client_….
+  // These are bearer-equivalent: they appear in URL paths as well as bodies.
+  /\b(?:sess|session|client|tok|token|auth|cred|secret|apikey)_[A-Za-z0-9]{16,}\b/gi,
   // AWS access key IDs.
   /\b(?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA)[A-Z0-9]{16}\b/g,
   // GitHub tokens, classic and fine-grained.

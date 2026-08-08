@@ -71,6 +71,22 @@ fabricated log entries that the developer's AI agent would then read and act on.
 explicit settings allowlist with clamped ranges, and removal of caller-supplied
 filesystem paths.
 
+## Redaction is best-effort, and layered
+
+Credential scrubbing runs twice: in the browser before anything is truncated or
+transmitted, and again on the server before storage. The browser pass is the
+one that matters most — it means a recognised secret never crosses the socket.
+
+It is pattern-based, so it is **not a guarantee**. It covers credential-bearing
+headers, JWTs (including ones cut short by truncation), vendor session and
+client identifiers, cloud provider keys, and common `password`/`token` JSON
+fields. A bespoke or unrecognised token shape can still get through. Treat
+`--no-redact` as strictly for cases where you have decided the captured data is
+not sensitive.
+
+If you find a shape that leaks, that is worth reporting — the pattern list is
+meant to grow.
+
 ## Design commitments in 2.x
 
 - The connector binds loopback and refuses anything else without an explicit,

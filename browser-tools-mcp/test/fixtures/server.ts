@@ -26,6 +26,11 @@ const PAGE = `<!doctype html>
 
       fetch("/api/secret").then(function () { console.log("MARKER-FETCH-SECRET"); });
 
+      // Mirrors a real auth provider touching its session endpoint.
+      fetch("/v1/client/sessions/sess_3HWEvAAPLW3pElwMd0oolLs5aF7/touch")
+        .then(function (r) { return r.json(); })
+        .then(function () { console.log("MARKER-FETCH-SESSION"); });
+
       setTimeout(function () {
         console.log("MARKER-LATE-LOG");
       }, 400);
@@ -62,6 +67,27 @@ export async function startFixtureServer(): Promise<FixtureServer> {
         "Set-Cookie": "session=SUPERSECRETCOOKIEVALUE; Path=/",
       });
       res.end(JSON.stringify({ token: "ghp_abcdefghijklmnopqrstuvwxyz0123456789" }));
+      return;
+    }
+
+    // Reproduces the shape of real auth traffic that leaked in manual testing:
+    // a long JWT (longer than the 500-char truncation limit) and vendor session
+    // ids in both the response body and the URL path.
+    if (url.startsWith("/v1/client/sessions/sess_")) {
+      const jwt =
+        "eyJhbGciOiJSUzI1NiIsImNhdCI6ImNsX0I3ZDRQZDRQZDRQIiwia2lkIjoiaW5zXzJa" +
+        "X".repeat(600) +
+        ".eyJzdWIiOiJ1c2VyXzJhYmMiLCJzaWQiOiJzZXNzXzNIV0V2QSJ9.SIGNATUREabcdef123456";
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          response: {
+            object: "client",
+            id: "client_3GmhO0nHNv39mTjwcKR6AbTJW0F",
+            sessions: [{ object: "session", id: "sess_3HWEvAAPLW3pElwMd0oolLs5aF7", jwt }],
+          },
+        })
+      );
       return;
     }
 
