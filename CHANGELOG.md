@@ -36,6 +36,12 @@
   response bodies. Scrubbing now happens **in the browser, before truncation**,
   so secrets no longer cross the socket at all, and the server keeps its own
   pass as defence in depth.
+- **Redaction no longer destroys base64-encoded data that is not a token.**
+  "eyJ" is only base64 for `{"`, so every base64-encoded JSON object starts the
+  same way as a JWT. Matching on that prefix turned Clerk profile image URLs
+  into `https://img.clerk.com/[REDACTED]`. A candidate is now confirmed by
+  decoding its header and looking for the fields only a JWT carries, so
+  truncated tokens are still caught and innocent payloads are left alone.
 - **A reconnecting background tab no longer steals targeting.** A tab that is
   timer-throttled, misses the heartbeat and reconnects looked identical to a
   user opening DevTools on a new tab, so it silently became the target of

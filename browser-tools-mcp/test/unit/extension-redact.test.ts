@@ -97,3 +97,31 @@ describe("extension and server scrubbing agree", () => {
     }
   });
 });
+
+describe("base64 JSON that is not a token", () => {
+  const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+
+  it("leaves a Clerk image URL intact", () => {
+    const url = `https://img.clerk.com/${b64({ type: "proxy", src: "https://images.clerk.dev/img_2abc" })}`;
+    expect(scrubAndTruncate(url, 500)).toBe(url);
+  });
+
+  it("still redacts a truncated JWT", () => {
+    const header = b64({ alg: "RS256", typ: "JWT" });
+    const out = scrubAndTruncate(`auth ${header}XXXXXXXXXXXXXXXXXXXX`, 500);
+    expect(out).toContain("[REDACTED]");
+    expect(out).not.toContain(header);
+  });
+
+  it("agrees with the server about what counts as a JWT", async () => {
+    const { redactSecretsInString } = await import("../../src/util/redact");
+    const image = `https://img.clerk.com/${b64({ type: "proxy", src: "x" })}`;
+    const token = `${b64({ alg: "RS256", typ: "JWT" })}XXXXXXXXXXXXXXXXXXXX`;
+
+    // Disagreement here means one layer leaks or one destroys useful data.
+    expect(scrubAndTruncate(image, 500)).toBe(image);
+    expect(redactSecretsInString(image)).toBe(image);
+    expect(scrubSecrets(token)).toContain("[REDACTED]");
+    expect(redactSecretsInString(token)).toContain("[REDACTED]");
+  });
+});

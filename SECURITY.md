@@ -84,8 +84,14 @@ fields. A bespoke or unrecognised token shape can still get through. Treat
 `--no-redact` as strictly for cases where you have decided the captured data is
 not sensitive.
 
-If you find a shape that leaks, that is worth reporting — the pattern list is
-meant to grow.
+Over-redaction is treated as a bug too. A false positive silently destroys the
+debugging information this tool exists to provide, so patterns are confirmed
+rather than assumed where a cheap check exists — a JWT candidate, for instance,
+is verified by decoding its header, because plenty of harmless data is also
+base64-encoded JSON.
+
+If you find a shape that leaks, or one that is being redacted when it should not
+be, both are worth reporting.
 
 ## Design commitments in 2.x
 

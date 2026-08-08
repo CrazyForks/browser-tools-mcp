@@ -41,13 +41,6 @@ const SENSITIVE_HEADER_SET = new Set(SENSITIVE_HEADERS);
 const SECRET_PATTERNS: readonly RegExp[] = [
   // PEM private key blocks (must run first — it spans lines).
   /-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z]+ )?PRIVATE KEY-----/g,
-  // JSON Web Tokens, including ones already cut short.
-  //
-  // The later segments are optional on purpose: the extension truncates long
-  // strings before sending, so a JWT frequently arrives with only its header.
-  // "eyJ" is base64 for '{"', which makes a long run starting that way a token
-  // rather than ordinary text.
-  /\beyJ[A-Za-z0-9_-]{15,}(?:\.[A-Za-z0-9_-]+){0,2}/g,
   // Vendor session and client identifiers, e.g. Clerk's sess_… and client_….
   // These are bearer-equivalent: they appear in URL paths as well as bodies.
   /\b(?:sess|session|client|tok|token|auth|cred|secret|apikey)_[A-Za-z0-9]{16,}\b/gi,
@@ -65,6 +58,45 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   // Google API keys.
   /\bAIza[A-Za-z0-9_-]{35}\b/g,
 ];
+
+/**
+ * Candidates for a JSON Web Token: base64url that starts with an encoded '{"'.
+ *
+ * Matching this alone is not enough. "eyJ" is simply base64 for '{"', so every
+ * base64-encoded JSON object looks the same at the start — Clerk encodes image
+ * parameters exactly this way, and treating those as secrets turned profile
+ * image URLs into https://img.clerk.com/[REDACTED]. Each candidate is checked
+ * by isJwt() below.
+ */
+const JWT_CANDIDATE = /\beyJ[A-Za-z0-9_-]{15,}(?:\.[A-Za-z0-9_-]+){0,2}/g;
+
+/** Fields that appear in a JWT header and not in ordinary encoded JSON. */
+const JWT_HEADER_FIELDS = /"(?:alg|typ|kid)"/;
+
+function decodeBase64Prefix(value: string): string {
+  // Decode a whole number of base64 groups, since the tail may be cut off.
+  const usable = value.slice(0, 40);
+  const aligned = usable.slice(0, usable.length - (usable.length % 4));
+  if (aligned.length === 0) return "";
+  try {
+    return Buffer.from(aligned.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Decides whether a base64url run is really a token.
+ *
+ * Three dot-separated segments is JWT-shaped whatever it contains. With fewer —
+ * which is what truncation leaves behind — the header is decoded and checked
+ * for the fields only a JWT carries.
+ */
+export function isJwt(candidate: string): boolean {
+  if (candidate.split(".").length >= 3) return true;
+  const header = candidate.split(".")[0] ?? "";
+  return JWT_HEADER_FIELDS.test(decodeBase64Prefix(header));
+}
 
 /** `Authorization: Bearer <token>` style values appearing inline in text. */
 const AUTH_SCHEME_PATTERN = /\b(Bearer|Basic|Token|Digest)\s+[A-Za-z0-9._~+/=-]{16,}/gi;
@@ -84,6 +116,7 @@ export function redactSecretsInString(input: string): string {
   for (const pattern of SECRET_PATTERNS) {
     out = out.replace(pattern, REDACTED);
   }
+  out = out.replace(JWT_CANDIDATE, (match) => (isJwt(match) ? REDACTED : match));
   out = out.replace(AUTH_SCHEME_PATTERN, (_m, scheme: string) => `${scheme} ${REDACTED}`);
   out = out.replace(SECRETISH_KEY_PATTERN, (_m, keyPart: string) => `${keyPart}"${REDACTED}"`);
   return out;

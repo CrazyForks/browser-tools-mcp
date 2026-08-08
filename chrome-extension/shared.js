@@ -189,8 +189,6 @@ const BTMCP_REDACTED = "[REDACTED]";
 
 const BTMCP_SECRET_PATTERNS = [
   /-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z]+ )?PRIVATE KEY-----/g,
-  // Later JWT segments are optional so a partial token still matches.
-  /\beyJ[A-Za-z0-9_-]{15,}(?:\.[A-Za-z0-9_-]+){0,2}/g,
   /\b(?:sess|session|client|tok|token|auth|cred|secret|apikey)_[A-Za-z0-9]{16,}\b/gi,
   /\b(?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA)[A-Z0-9]{16}\b/g,
   /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
@@ -201,6 +199,33 @@ const BTMCP_SECRET_PATTERNS = [
   /\bAIza[A-Za-z0-9_-]{35}\b/g,
 ];
 
+/**
+ * Base64url starting with an encoded '{"'. Only a candidate — see btmcpIsJwt.
+ * Plenty of harmless data is encoded this way, including Clerk image
+ * parameters, so redacting on the prefix alone destroys useful URLs.
+ */
+const BTMCP_JWT_CANDIDATE = /\beyJ[A-Za-z0-9_-]{15,}(?:\.[A-Za-z0-9_-]+){0,2}/g;
+
+const BTMCP_JWT_HEADER_FIELDS = /"(?:alg|typ|kid)"/;
+
+function btmcpDecodeBase64Prefix(value) {
+  // Decode whole base64 groups only; the tail is often cut off.
+  const usable = value.slice(0, 40);
+  const aligned = usable.slice(0, usable.length - (usable.length % 4));
+  if (!aligned) return "";
+  try {
+    return atob(aligned.replace(/-/g, "+").replace(/_/g, "/"));
+  } catch {
+    return "";
+  }
+}
+
+/** Three segments is JWT-shaped; fewer means checking the decoded header. */
+function btmcpIsJwt(candidate) {
+  if (candidate.split(".").length >= 3) return true;
+  return BTMCP_JWT_HEADER_FIELDS.test(btmcpDecodeBase64Prefix(candidate.split(".")[0] || ""));
+}
+
 const BTMCP_AUTH_SCHEME = /\b(Bearer|Basic|Token|Digest)\s+[A-Za-z0-9._~+/=-]{16,}/gi;
 
 const BTMCP_SECRETISH_KEY =
@@ -210,6 +235,7 @@ function scrubSecrets(value) {
   if (typeof value !== "string" || value.length === 0) return value;
   let out = value;
   for (const pattern of BTMCP_SECRET_PATTERNS) out = out.replace(pattern, BTMCP_REDACTED);
+  out = out.replace(BTMCP_JWT_CANDIDATE, (m) => (btmcpIsJwt(m) ? BTMCP_REDACTED : m));
   out = out.replace(BTMCP_AUTH_SCHEME, (m, scheme) => scheme + " " + BTMCP_REDACTED);
   out = out.replace(BTMCP_SECRETISH_KEY, (m, keyPart) => keyPart + '"' + BTMCP_REDACTED + '"');
   return out;

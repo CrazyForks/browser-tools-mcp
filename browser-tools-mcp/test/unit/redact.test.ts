@@ -191,3 +191,52 @@ describe("vendor session identifiers", () => {
     expect(redactSecretsInString(text)).toBe(text);
   });
 });
+
+/**
+ * "eyJ" is only base64 for '{"', so any base64-encoded JSON starts that way.
+ * Matching on the prefix alone destroyed innocent data — Clerk encodes image
+ * parameters exactly like this, and a profile image URL came back as
+ * https://img.clerk.com/[REDACTED], which is useless for debugging.
+ *
+ * A JWT is distinguishable: its first segment decodes to a header carrying
+ * "alg". That survives truncation, because the header comes first.
+ */
+describe("base64 JSON that is not a token", () => {
+  const b64 = (value: unknown) =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+
+  it("leaves a Clerk image URL intact", () => {
+    const param = b64({ type: "proxy", src: "https://images.clerk.dev/oauth_google/img_2abc" });
+    const url = `https://img.clerk.com/${param}`;
+
+    expect(redactSecretsInString(url)).toBe(url);
+  });
+
+  it("leaves other base64-encoded JSON parameters intact", () => {
+    const param = b64({ width: 200, height: 200, fit: "crop" });
+    const text = `loading https://cdn.example.com/i/${param}`;
+
+    expect(redactSecretsInString(text)).toBe(text);
+  });
+
+  it("still redacts a truncated JWT, which carries alg in its header", () => {
+    const header = b64({ alg: "RS256", typ: "JWT", kid: "ins_2Z" });
+    const truncated = `${header}XXXXXXXXXXXXXXXXXXXX`;
+
+    const out = redactSecretsInString(`auth ${truncated}`);
+    expect(out).toContain("[REDACTED]");
+    expect(out).not.toContain(header);
+  });
+
+  it("still redacts a complete three-segment JWT", () => {
+    const full =
+      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r0";
+    expect(redactSecretsInString(full)).not.toContain(full);
+  });
+
+  it("redacts a three-segment token even when its header is unreadable", () => {
+    // Three dot-separated base64 segments is JWT-shaped regardless of contents.
+    const shaped = "eyJzb21ldGhpbmdlbHNlIjoxfQ.eyJzdWIiOiJhIn0.c2lnbmF0dXJlaGVyZQ";
+    expect(redactSecretsInString(shaped)).toContain("[REDACTED]");
+  });
+});
