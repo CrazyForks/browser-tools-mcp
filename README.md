@@ -212,7 +212,10 @@ it automatically.
 - Console capture defaults to the DevTools protocol, which makes Chrome show a
   "started debugging this browser" banner. Switch the panel's capture mode to
   **Wrap page console** to avoid it; that mode is also what Firefox uses.
-- Audits launch a separate headless Chrome and take up to a minute.
+- Audits launch a separate browser and take up to a minute. Any Chromium-based
+  browser works — Chrome, Chromium, Brave, Edge, Vivaldi, Opera or Arc — and
+  `--doctor` reports which one will be used. Set `CHROME_PATH` to override.
+  Arc is supported on a best-effort basis and has not been verified headless.
 
 ## Development
 

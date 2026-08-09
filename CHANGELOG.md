@@ -36,6 +36,14 @@
   response bodies. Scrubbing now happens **in the browser, before truncation**,
   so secrets no longer cross the socket at all, and the server keeps its own
   pass as defence in depth.
+- **Audits now work without Google Chrome installed.** `chrome-launcher` only
+  looks for Chrome and Chromium, so anyone running Arc, Brave or Edge and
+  nothing else lost all four audit tools to "No Chrome installations found",
+  with no hint that another browser would do. Any Chromium-based browser can
+  serve, so a fallback chain now covers Chromium, Canary, Brave, Edge, Vivaldi,
+  Opera and Arc, plus a Chrome for Testing build if one is present. `--doctor`
+  reports which browser audits will use, and the error when none is found now
+  names what was looked for and how to point at one with `CHROME_PATH`.
 - **Redaction no longer destroys base64-encoded data that is not a token.**
   "eyJ" is only base64 for `{"`, so every base64-encoded JSON object starts the
   same way as a JWT. Matching on that prefix turned Clerk profile image URLs

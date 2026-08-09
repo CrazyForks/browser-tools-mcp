@@ -1,5 +1,6 @@
 import { createLogger } from "../util/logger.js";
 import { extractAuditReport } from "./extract.js";
+import { findAuditBrowser, NoBrowserError } from "./find-browser.js";
 import type { AuditCategory, AuditReport, LighthouseResultLike } from "./types.js";
 
 const log = createLogger("lighthouse");
@@ -65,16 +66,23 @@ export async function runLighthouseAudit(
   let chrome: { port: number; kill: () => Promise<void> } | undefined;
 
   try {
-    const [{ launch }, lighthouseModule] = await Promise.all([
+    const [chromeLauncher, lighthouseModule] = await Promise.all([
       import("chrome-launcher"),
       import("lighthouse"),
     ]);
     const lighthouse = (lighthouseModule.default ?? lighthouseModule) as any;
 
-    chrome = (await launch({ chromeFlags: CHROME_FLAGS })) as unknown as {
-      port: number;
-      kill: () => Promise<void>;
-    };
+    // chrome-launcher only knows about Chrome and Chromium. Anyone running Arc,
+    // Brave or Edge with no Chrome installed would otherwise lose every audit.
+    const browser = findAuditBrowser({
+      installed: () => (chromeLauncher as any).Launcher?.getInstallations?.() ?? [],
+    });
+    log.debug(`Running the audit in ${browser.name} (${browser.source})`);
+
+    chrome = (await chromeLauncher.launch({
+      chromeFlags: CHROME_FLAGS,
+      chromePath: browser.path,
+    })) as unknown as { port: number; kill: () => Promise<void> };
 
     const flags = {
       port: chrome.port,
@@ -102,6 +110,8 @@ export async function runLighthouseAudit(
     return extractAuditReport(lhr, url, category);
   } catch (error) {
     if (error instanceof AuditError) throw error;
+    // Already a clear, actionable explanation; do not bury it.
+    if (error instanceof NoBrowserError) throw new AuditError(error.message);
     const message = error instanceof Error ? error.message : String(error);
     if (/Cannot find module|ERR_MODULE_NOT_FOUND/.test(message)) {
       throw new AuditError(
@@ -110,7 +120,8 @@ export async function runLighthouseAudit(
     }
     if (/No Chrome installations found|ChromePathNotSet/i.test(message)) {
       throw new AuditError(
-        "No Chrome installation was found. Install Chrome, or set CHROME_PATH to its executable."
+        "No Chromium-based browser could be launched for the audit. Set CHROME_PATH to the " +
+          "executable of a browser you have installed."
       );
     }
     throw new AuditError(`${category} audit failed: ${message}`);

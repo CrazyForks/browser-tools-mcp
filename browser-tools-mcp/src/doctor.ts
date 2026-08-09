@@ -66,6 +66,21 @@ export async function runDoctor(options: CliOptions): Promise<number> {
     out += `  ! Could not query the connector: ${error instanceof Error ? error.message : String(error)}\n`;
   }
 
+  // Audits launch their own browser, so a missing one breaks four tools while
+  // everything else keeps working — worth surfacing before it is hit.
+  try {
+    const { findAuditBrowser } = await import("./lighthouse/find-browser.js");
+    const chromeLauncher = await import("chrome-launcher");
+    const browser = findAuditBrowser({
+      installed: () => (chromeLauncher as any).Launcher?.getInstallations?.() ?? [],
+    });
+    out += line("Audit browser", `${browser.name}`);
+  } catch (error) {
+    problems += 1;
+    out += line("Audit browser", "none found");
+    out += `  ! Lighthouse audits will not run. ${error instanceof Error ? error.message : ""}\n`;
+  }
+
   try {
     fs.mkdirSync(screenshotDir, { recursive: true });
     fs.accessSync(screenshotDir, fs.constants.W_OK);
