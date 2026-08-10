@@ -75,6 +75,7 @@ beforeAll(async () => {
   }
 
   context = await chromium.launchPersistentContext(userDataDir, {
+    ...browserSupport.launchOptions,
     headless: false,
     viewport: { width: 1280, height: 800 },
     args: [

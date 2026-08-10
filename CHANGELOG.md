@@ -41,6 +41,14 @@
   The error now names the browser and its path, keeps the underlying cause, and
   suggests a fix — including the ad-hoc-signing repair when the browser is a
   Playwright-downloaded Chromium, which macOS sometimes refuses to launch.
+- **An installed Google Chrome is no longer passed over.** `chrome-launcher`
+  locates browsers through Spotlight on macOS, which is unavailable in
+  restricted environments, with indexing off, or for an install too recent to
+  have been indexed. Stock Chrome was missing from the fallback list on the
+  assumption that chrome-launcher would always find it, so a freshly installed
+  Chrome lost out to a stale cached Playwright build. Installed browsers now
+  come first, cached test builds next, and heavily customised ones like Arc
+  last. Windows and Linux Chrome paths are covered too.
 - **Audits now work without Google Chrome installed.** `chrome-launcher` only
   looks for Chrome and Chromium, so anyone running Arc, Brave or Edge and
   nothing else lost all four audit tools to "No Chrome installations found",

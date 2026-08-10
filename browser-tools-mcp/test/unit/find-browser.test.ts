@@ -76,11 +76,20 @@ describe("findAuditBrowser", () => {
     );
   });
 
-  it("covers the browsers people actually use", () => {
-    const names = CHROMIUM_CANDIDATES.map((c) => c.name);
+  it("covers the browsers people actually use", async () => {
+    const { LAST_RESORT_CANDIDATES } = await import("../../src/lighthouse/find-browser");
+    const names = [...CHROMIUM_CANDIDATES, ...LAST_RESORT_CANDIDATES].map((c) => c.name);
     expect(names).toEqual(
-      expect.arrayContaining(["Brave", "Microsoft Edge", "Arc", "Vivaldi", "Opera"])
+      expect.arrayContaining(["Google Chrome", "Brave", "Microsoft Edge", "Arc", "Vivaldi", "Opera"])
     );
+  });
+
+  it("treats Arc as a last resort, behind better-behaved options", async () => {
+    const { LAST_RESORT_CANDIDATES } = await import("../../src/lighthouse/find-browser");
+    // Arc rewrites much of Chromium's window handling, so anything stock-like
+    // is a safer bet for a headless Lighthouse run.
+    expect(LAST_RESORT_CANDIDATES.map((c) => c.name)).toContain("Arc");
+    expect(CHROMIUM_CANDIDATES.map((c) => c.name)).not.toContain("Arc");
   });
 
   it("survives chrome-launcher throwing", () => {
@@ -168,5 +177,51 @@ describe("describeLaunchFailure", () => {
 
     expect(message).toContain("Brave");
     expect(message).not.toMatch(/codesign/i);
+  });
+});
+
+/**
+ * chrome-launcher locates Chrome on macOS via Spotlight, which is not always
+ * available — a restricted environment, indexing disabled, or an install too
+ * recent to have been indexed. With a real Chrome sitting in /Applications, its
+ * absence from the fallback list meant picking a stale cached Playwright build
+ * instead of the browser the user had just installed.
+ */
+describe("stock Chrome in the fallback list", () => {
+  const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+  const CACHED =
+    "/Users/x/Library/Caches/ms-playwright/chromium-1208/chrome-mac-arm64/Google Chrome for Testing";
+
+  it("finds an installed Chrome even when chrome-launcher reports none", () => {
+    const found = findAuditBrowser({
+      env: {},
+      exists: (p) => p === CHROME,
+      installed: () => [],
+    });
+
+    expect(found.path).toBe(CHROME);
+    expect(found.name).toBe("Google Chrome");
+  });
+
+  it("prefers real Chrome over a cached test build", () => {
+    const found = findAuditBrowser({
+      env: {},
+      exists: (p) => p === CHROME || p === CACHED,
+      installed: () => [],
+      extraCandidates: [{ name: "Chrome for Testing", path: CACHED }],
+    });
+
+    // The browser the user actually installed and maintains wins.
+    expect(found.path).toBe(CHROME);
+  });
+
+  it("lists stock Chrome among the candidates", () => {
+    expect(CHROMIUM_CANDIDATES.map((c) => c.path)).toContain(CHROME);
+  });
+
+  it("covers the Windows and Linux Chrome locations too", () => {
+    const paths = CHROMIUM_CANDIDATES.map((c) => c.path);
+    expect(paths.some((p) => p.includes("Program Files") && p.includes("chrome.exe"))).toBe(true);
+    expect(paths).toContain("/usr/bin/google-chrome");
   });
 });

@@ -39,19 +39,40 @@ const APPS = "/Applications";
  * behaves most predictably under Lighthouse, and Arc customises the most.
  */
 export const CHROMIUM_CANDIDATES: readonly BrowserCandidate[] = [
+  // Stock Chrome first. chrome-launcher should normally find this, but it
+  // locates browsers through Spotlight on macOS, which is not always available
+  // — restricted environments, indexing turned off, or an install too recent to
+  // have been indexed. Without this entry a freshly installed Chrome was passed
+  // over in favour of a stale cached build.
+  { name: "Google Chrome", path: `${APPS}/Google Chrome.app/Contents/MacOS/Google Chrome` },
   { name: "Chromium", path: `${APPS}/Chromium.app/Contents/MacOS/Chromium` },
   { name: "Google Chrome Canary", path: `${APPS}/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary` },
   { name: "Brave", path: `${APPS}/Brave Browser.app/Contents/MacOS/Brave Browser` },
   { name: "Microsoft Edge", path: `${APPS}/Microsoft Edge.app/Contents/MacOS/Microsoft Edge` },
   { name: "Vivaldi", path: `${APPS}/Vivaldi.app/Contents/MacOS/Vivaldi` },
   { name: "Opera", path: `${APPS}/Opera.app/Contents/MacOS/Opera` },
-  { name: "Arc", path: `${APPS}/Arc.app/Contents/MacOS/Arc` },
   // Linux locations, for the same browsers.
+  { name: "Google Chrome", path: "/usr/bin/google-chrome" },
+  { name: "Google Chrome", path: "/usr/bin/google-chrome-stable" },
   { name: "Chromium", path: "/usr/bin/chromium" },
   { name: "Chromium", path: "/usr/bin/chromium-browser" },
-  { name: "Google Chrome", path: "/usr/bin/google-chrome" },
   { name: "Brave", path: "/usr/bin/brave-browser" },
   { name: "Microsoft Edge", path: "/usr/bin/microsoft-edge" },
+  // Windows, since the project claims to support it.
+  { name: "Google Chrome", path: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" },
+  { name: "Google Chrome", path: "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe" },
+  { name: "Microsoft Edge", path: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe" },
+];
+
+/**
+ * Tried only once everything else is exhausted.
+ *
+ * Arc replaces much of Chromium's window and tab handling, so it is the most
+ * likely to behave unexpectedly headless. It is still far better than failing
+ * outright for someone who has nothing else installed.
+ */
+export const LAST_RESORT_CANDIDATES: readonly BrowserCandidate[] = [
+  { name: "Arc", path: `${APPS}/Arc.app/Contents/MacOS/Arc` },
 ];
 
 export interface FindOptions {
@@ -81,8 +102,13 @@ function playwrightChromium(exists: (p: string) => boolean): BrowserCandidate[] 
   const root = path.join(os.homedir(), "Library", "Caches", "ms-playwright");
   const found: BrowserCandidate[] = [];
   try {
-    for (const dir of fs.readdirSync(root)) {
-      if (!dir.startsWith("chromium-")) continue;
+    // Highest build number first; readdir order is arbitrary and an old build
+    // is likelier to be stale or broken.
+    const dirs = fs
+      .readdirSync(root)
+      .filter((d) => d.startsWith("chromium-"))
+      .sort((a, b) => Number(b.split("-")[1] ?? 0) - Number(a.split("-")[1] ?? 0));
+    for (const dir of dirs) {
       for (const variant of ["chrome-mac-arm64", "chrome-mac", "chrome-linux"]) {
         for (const leaf of [
           "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
@@ -119,10 +145,16 @@ export function findAuditBrowser(options: FindOptions = {}): FoundBrowser {
     /* its detection is best-effort; the fallbacks below still apply */
   }
 
+  // Installed browsers before cached test builds: a Chrome the user maintains
+  // is likelier to work, and to be current, than one a tool downloaded once.
+  // Installed, stock-like browsers first; then a cached Chrome for Testing,
+  // which is a real Chrome build but may be stale; then the heavily customised
+  // ones, which are better than nothing but likeliest to surprise.
   const fallbacks = [
+    ...CHROMIUM_CANDIDATES,
     ...(options.extraCandidates ?? []),
     ...playwrightChromium(exists),
-    ...CHROMIUM_CANDIDATES,
+    ...LAST_RESORT_CANDIDATES,
   ];
   for (const candidate of fallbacks) {
     if (exists(candidate.path)) {

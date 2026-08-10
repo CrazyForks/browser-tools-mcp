@@ -43,7 +43,7 @@ beforeAll(async () => {
   expect(INJECT_DRAIN).toContain("__btmcpBuffer");
 
   fixture = await startFixtureServer();
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: true, ...browserSupport.launchOptions });
 }, 120_000);
 
 afterAll(async () => {

@@ -96,6 +96,7 @@ function unpackedExtensionId(absolutePath: string): string {
 beforeAll(async () => {
   userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "bt-panel-profile-"));
   context = await chromium.launchPersistentContext(userDataDir, {
+    ...browserSupport.launchOptions,
     headless: false,
     args: [
       `--disable-extensions-except=${extensionPath}`,
