@@ -139,3 +139,32 @@ export function findAuditBrowser(options: FindOptions = {}): FoundBrowser {
       "Everything else (console, network, screenshots) works without this."
   );
 }
+
+/**
+ * Explains a browser that was found but would not start.
+ *
+ * Lighthouse reports this as a bare "connect ECONNREFUSED <port>", because from
+ * its side the debugging port simply never opened. That tells a user nothing.
+ */
+export function describeLaunchFailure(browser: FoundBrowser, cause: string): string {
+  const parts = [
+    `Found ${browser.name} at ${browser.path}, but it would not start, so the audit could not run.`,
+    `Underlying error: ${cause}`,
+  ];
+
+  if (browser.path.includes("ms-playwright")) {
+    // Playwright's Chromium is ad-hoc signed, and some macOS installs abort it
+    // on launch with no output at all.
+    parts.push(
+      "This is a Chromium downloaded by Playwright, which is ad-hoc signed and is " +
+        "sometimes refused by macOS. Re-signing it often helps: " +
+        `codesign --force --deep --sign - "${browser.path.replace(/\/Contents\/MacOS\/.*$/, "")}"`
+    );
+  }
+
+  parts.push(
+    "Otherwise set CHROME_PATH to a Chromium-based browser that does start, or install " +
+      "Google Chrome. Console, network and screenshot capture are unaffected."
+  );
+  return parts.join(" ");
+}

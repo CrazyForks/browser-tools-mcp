@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { browserAvailability } from "../helpers/browser-available";
 import { chromium } from "playwright";
 
 import { runLighthouseAudit, AuditError, assertAuditableUrl } from "../../src/lighthouse/runner";
@@ -12,6 +13,10 @@ import { startFixtureServer, type FixtureServer } from "../fixtures/server";
  * installed version, or whether a real result has the shape the extractor
  * expects. Four of the fifteen tools depend on this path.
  */
+
+// Skips rather than fails where no browser can start — see the helper.
+const browserSupport = await browserAvailability();
+if (!browserSupport.usable) console.warn(`\n  SKIPPED: ${browserSupport.reason}\n`);
 
 let fixture: FixtureServer;
 
@@ -29,7 +34,7 @@ afterAll(async () => {
   await fixture?.close();
 });
 
-describe("lighthouse audits against a real page", () => {
+describe.skipIf(!browserSupport.usable)("lighthouse audits against a real page", () => {
   it("runs an accessibility audit and returns a usable report", async () => {
     const report = await runLighthouseAudit({
       url: fixture.url,

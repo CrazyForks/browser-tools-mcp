@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { browserAvailability } from "../helpers/browser-available";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -25,6 +26,10 @@ import { waitForPortFree } from "../helpers/port";
  * naming it. The final block opens a second tab on purpose, to prove targeting
  * works when it is ambiguous.
  */
+
+// Skips rather than fails where no browser can start — see the helper.
+const browserSupport = await browserAvailability();
+if (!browserSupport.usable) console.warn(`\n  SKIPPED: ${browserSupport.reason}\n`);
 
 const extensionPath = path.resolve(
   fileURLToPath(new URL("../../../chrome-extension", import.meta.url))
@@ -139,7 +144,7 @@ async function loadPage(pathname = "index.html"): Promise<Page> {
 
 // ---------------------------------------------------------------- capture
 
-describe("extension to connector", () => {
+describe.skipIf(!browserSupport.usable)("extension to connector", () => {
   it("loads the extension and connects to the connector", async () => {
     await loadPage();
     expect(connector.hasExtension()).toBe(true);
@@ -276,7 +281,7 @@ describe("extension to connector", () => {
 
 // ------------------------------------------------------------- full chain
 
-describe("MCP client to real browser", () => {
+describe.skipIf(!browserSupport.usable)("MCP client to real browser", () => {
   it("reports the extension as connected through getConnectionStatus", async () => {
     await loadPage();
 
@@ -416,7 +421,7 @@ describe("MCP client to real browser", () => {
 
 // --------------------------------------------------------- screenshot size
 
-describe("screenshot byte budget", () => {
+describe.skipIf(!browserSupport.usable)("screenshot byte budget", () => {
   /**
    * Measured before the budget existed: a viewport capture of dense content ran
    * to 13.3 MB of base64 on a 1440p retina display and 17.9 MB on an ultrawide.
@@ -491,7 +496,7 @@ describe("screenshot byte budget", () => {
 
 // --------------------------------------------------------------- multi-tab
 
-describe("two real tabs", () => {
+describe.skipIf(!browserSupport.usable)("two real tabs", () => {
   /**
    * The rest of this file deliberately uses one tab. This is the case that
    * used to be broken: with DevTools open on two tabs, telemetry and

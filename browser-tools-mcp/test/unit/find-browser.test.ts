@@ -123,3 +123,50 @@ describe("when there is no browser at all", () => {
     }
   });
 });
+
+/**
+ * A browser that exists but will not start is a distinct failure, and the one
+ * users actually hit: Playwright's ad-hoc-signed Chromium aborts on some macOS
+ * installs, and Lighthouse surfaced that as "connect ECONNREFUSED 127.0.0.1:57529",
+ * which says nothing about what went wrong or what to do.
+ */
+describe("describeLaunchFailure", () => {
+  it("names the browser that failed and suggests an alternative", async () => {
+    const { describeLaunchFailure } = await import("../../src/lighthouse/find-browser");
+    const message = describeLaunchFailure(
+      { name: "Chrome for Testing", path: "/cache/x/Chrome", source: "known-install" },
+      "connect ECONNREFUSED 127.0.0.1:57529"
+    );
+
+    expect(message).toContain("Chrome for Testing");
+    expect(message).toContain("/cache/x/Chrome");
+    expect(message).toMatch(/CHROME_PATH/);
+    // The underlying error still has to be there for anyone debugging.
+    expect(message).toContain("ECONNREFUSED");
+  });
+
+  it("mentions the macOS signing cause for a Playwright cache path", async () => {
+    const { describeLaunchFailure } = await import("../../src/lighthouse/find-browser");
+    const message = describeLaunchFailure(
+      {
+        name: "Chrome for Testing",
+        path: "/Users/x/Library/Caches/ms-playwright/chromium-1/chrome-mac-arm64/Google Chrome for Testing",
+        source: "known-install",
+      },
+      "connect ECONNREFUSED"
+    );
+
+    expect(message).toMatch(/sign|codesign/i);
+  });
+
+  it("stays brief for an ordinary browser", async () => {
+    const { describeLaunchFailure } = await import("../../src/lighthouse/find-browser");
+    const message = describeLaunchFailure(
+      { name: "Brave", path: "/Applications/Brave Browser.app/x", source: "known-install" },
+      "spawn EACCES"
+    );
+
+    expect(message).toContain("Brave");
+    expect(message).not.toMatch(/codesign/i);
+  });
+});

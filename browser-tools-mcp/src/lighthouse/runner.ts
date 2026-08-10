@@ -1,6 +1,6 @@
 import { createLogger } from "../util/logger.js";
 import { extractAuditReport } from "./extract.js";
-import { findAuditBrowser, NoBrowserError } from "./find-browser.js";
+import { describeLaunchFailure, findAuditBrowser, NoBrowserError, type FoundBrowser } from "./find-browser.js";
 import type { AuditCategory, AuditReport, LighthouseResultLike } from "./types.js";
 
 const log = createLogger("lighthouse");
@@ -64,6 +64,7 @@ export async function runLighthouseAudit(
   const url = assertAuditableUrl(options.url).toString();
 
   let chrome: { port: number; kill: () => Promise<void> } | undefined;
+  let chosen: FoundBrowser | undefined;
 
   try {
     const [chromeLauncher, lighthouseModule] = await Promise.all([
@@ -77,6 +78,7 @@ export async function runLighthouseAudit(
     const browser = findAuditBrowser({
       installed: () => (chromeLauncher as any).Launcher?.getInstallations?.() ?? [],
     });
+    chosen = browser;
     log.debug(`Running the audit in ${browser.name} (${browser.source})`);
 
     chrome = (await chromeLauncher.launch({
@@ -123,6 +125,10 @@ export async function runLighthouseAudit(
         "No Chromium-based browser could be launched for the audit. Set CHROME_PATH to the " +
           "executable of a browser you have installed."
       );
+    }
+    // A browser that was located but never opened its debugging port.
+    if (chosen && /ECONNREFUSED|Failed to launch|spawn|SIGABRT|socket hang up/i.test(message)) {
+      throw new AuditError(describeLaunchFailure(chosen, message));
     }
     throw new AuditError(`${category} audit failed: ${message}`);
   } finally {

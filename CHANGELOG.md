@@ -36,6 +36,11 @@
   response bodies. Scrubbing now happens **in the browser, before truncation**,
   so secrets no longer cross the socket at all, and the server keeps its own
   pass as defence in depth.
+- **A browser that is found but will not start now explains itself.** Lighthouse
+  surfaced that as `connect ECONNREFUSED 127.0.0.1:57529`, which says nothing.
+  The error now names the browser and its path, keeps the underlying cause, and
+  suggests a fix — including the ad-hoc-signing repair when the browser is a
+  Playwright-downloaded Chromium, which macOS sometimes refuses to launch.
 - **Audits now work without Google Chrome installed.** `chrome-launcher` only
   looks for Chrome and Chromium, so anyone running Arc, Brave or Edge and
   nothing else lost all four audit tools to "No Chrome installations found",

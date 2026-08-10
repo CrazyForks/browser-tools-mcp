@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { browserAvailability } from "../helpers/browser-available";
 import { chromium, type Browser, type Page } from "playwright";
 
 import { startFixtureServer, type FixtureServer } from "../fixtures/server";
@@ -19,6 +20,10 @@ import { startFixtureServer, type FixtureServer } from "../fixtures/server";
 const sharedJsPath = path.resolve(
   fileURLToPath(new URL("../../../chrome-extension/shared.js", import.meta.url))
 );
+
+// Skips rather than fails where no browser can start — see the helper.
+const browserSupport = await browserAvailability();
+if (!browserSupport.usable) console.warn(`\n  SKIPPED: ${browserSupport.reason}\n`);
 
 let INJECT_BOOTSTRAP: string;
 let INJECT_DRAIN: string;
@@ -53,7 +58,7 @@ async function freshPage(): Promise<Page> {
   return page;
 }
 
-describe("injected console capture", () => {
+describe.skipIf(!browserSupport.usable)("injected console capture", () => {
   it("installs without disturbing the page", async () => {
     const page = await freshPage();
     const installed = await page.evaluate("window.__btmcpInstalled");

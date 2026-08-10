@@ -4,6 +4,7 @@ import os from "node:os";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
+import { browserAvailability } from "../helpers/browser-available";
 import { chromium, type BrowserContext, type Page } from "playwright";
 
 /**
@@ -17,6 +18,10 @@ import { chromium, type BrowserContext, type Page } from "playwright";
  * runtime. The stub's shape is pinned against devtools.js by the contract tests
  * at the bottom of this file.
  */
+
+// Skips rather than fails where no browser can start — see the helper.
+const browserSupport = await browserAvailability();
+if (!browserSupport.usable) console.warn(`\n  SKIPPED: ${browserSupport.reason}\n`);
 
 const extensionPath = path.resolve(
   fileURLToPath(new URL("../../../chrome-extension", import.meta.url))
@@ -127,7 +132,7 @@ async function openPanel(settings = STUB_SETTINGS): Promise<Page> {
   return panel;
 }
 
-describe("panel UI in the real extension origin", () => {
+describe.skipIf(!browserSupport.usable)("panel UI in the real extension origin", () => {
   beforeEach(async () => {
     page = await openPanel();
   });
@@ -301,7 +306,7 @@ describe("panel UI in the real extension origin", () => {
   });
 });
 
-describe("panel UI without a bridge", () => {
+describe.skipIf(!browserSupport.usable)("panel UI without a bridge", () => {
   it("explains itself instead of hanging silently", async () => {
     const panel = await context!.newPage();
     const errors: string[] = [];
@@ -324,7 +329,7 @@ describe("panel UI without a bridge", () => {
   }, 60_000);
 });
 
-describe("panel and devtools page agree on the bridge contract", () => {
+describe.skipIf(!browserSupport.usable)("panel and devtools page agree on the bridge contract", () => {
   const read = (file: string) =>
     fs.readFileSync(path.join(extensionPath, file), "utf8");
 
