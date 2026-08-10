@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.1
+
+Metadata only — no code changes. `npx @agentdeskai/browser-tools-mcp@latest`
+behaves identically to 2.0.0.
+
+- Added `mcpName` to `package.json`. The MCP Registry verifies that a listed
+  server actually owns the npm package behind it, and for npm packages that
+  proof is this field; without it the listing cannot be published.
+- `server.json` moved to the current `2025-12-11` schema. Its description was
+  over the registry's 100-character limit, which validation caught.
+
 ## 2.0.0
 
 A rewrite. See [MIGRATION.md](MIGRATION.md) to upgrade and [SECURITY.md](SECURITY.md)

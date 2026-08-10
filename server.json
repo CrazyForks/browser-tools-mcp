@@ -1,8 +1,8 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.AgentDeskAI/browser-tools-mcp",
-  "description": "Live browser telemetry for AI coding agents: console logs, network requests, screenshots and Lighthouse audits from your real Chrome session.",
-  "version": "2.0.0",
+  "description": "Console, network, screenshots and Lighthouse audits from your real Chrome session.",
+  "version": "2.0.1",
   "repository": {
     "url": "https://github.com/AgentDeskAI/browser-tools-mcp",
     "source": "github"
@@ -13,7 +13,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@agentdeskai/browser-tools-mcp",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "transport": {
         "type": "stdio"
       },
