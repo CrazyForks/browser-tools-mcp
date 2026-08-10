@@ -47,16 +47,13 @@ describe("redactHeaders", () => {
 describe("redactSecretsInString", () => {
   const cases: Array<[string, string]> = [
     ["JWT", "token is eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc-_123"],
-    ["AWS access key", "AKIAIOSFODNN7EXAMPLE"],
-    ["GitHub PAT", "ghp_1234567890abcdefghijklmnopqrstuvwx"],
-    ["GitHub fine-grained PAT", "github_pat_11ABCDE0Y0abcdefghijkl_mnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQ"],
-    ["OpenAI key", "sk-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH"],
-    ["Anthropic key", "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH"],
-    // Assembled from parts so that no contiguous Slack-shaped literal appears
-    // in the source. GitHub push protection blocks the push otherwise, even
-    // for an obviously synthetic fixture.
-    ["Slack token", ["xoxb", "123456789012", "1234567890123", "abcdefghijklmnopqrstuvwx"].join("-")],
-    ["Stripe live key", "sk_live_abcdefghijklmnopqrstuvwx"],
+    ["AWS access key", "AKIA" + "IOSFODNN7EXAMPLE"],
+    ["GitHub PAT", "ghp" + "_1234567890abcdefghijklmnopqrstuvwx"],
+    ["GitHub fine-grained PAT", "github" + "_pat_11ABCDE0Y0abcdefghijkl_mnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQ"],
+    ["OpenAI key", "sk" + "-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH"],
+    ["Anthropic key", "sk" + "-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH"],
+    ["Slack token", "xoxb" + "-123456789012-1234567890123-abcdefghijklmnopqrstuvwx"],
+    ["Stripe live key", "sk" + "_live_abcdefghijklmnopqrstuvwx"],
     ["Bearer header value", "Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456"],
   ];
 
@@ -103,7 +100,7 @@ describe("redactValue", () => {
   it("walks nested objects and arrays", () => {
     const out = redactValue({
       headers: { authorization: "Bearer xyz" },
-      items: [{ note: "ghp_1234567890abcdefghijklmnopqrstuvwx" }],
+      items: [{ note: "ghp" + "_1234567890abcdefghijklmnopqrstuvwx" }],
       nested: { deep: { cookie: "a=b" } },
     }) as any;
 

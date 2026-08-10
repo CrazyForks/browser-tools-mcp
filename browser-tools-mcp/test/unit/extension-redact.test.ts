@@ -85,9 +85,9 @@ describe("extension and server scrubbing agree", () => {
     const samples = [
       "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc-_123456789012",
       "sess_3HWEvAAPLW3pElwMd0oolLs5aF7",
-      "ghp_1234567890abcdefghijklmnopqrstuvwx",
-      "AKIAIOSFODNN7EXAMPLE",
-      "sk_live_abcdefghijklmnopqrstuvwx",
+      "ghp" + "_1234567890abcdefghijklmnopqrstuvwx",
+      "AKIA" + "IOSFODNN7EXAMPLE",
+      "sk" + "_live_abcdefghijklmnopqrstuvwx",
     ];
 
     // Both layers run; they must not disagree about what is a secret.

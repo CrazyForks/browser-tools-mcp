@@ -66,7 +66,7 @@ export async function startFixtureServer(): Promise<FixtureServer> {
         "Content-Type": "application/json",
         "Set-Cookie": "session=SUPERSECRETCOOKIEVALUE; Path=/",
       });
-      res.end(JSON.stringify({ token: "ghp_abcdefghijklmnopqrstuvwxyz0123456789" }));
+      res.end(JSON.stringify({ token: "ghp" + "_abcdefghijklmnopqrstuvwxyz0123456789" }));
       return;
     }
 

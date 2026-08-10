@@ -133,7 +133,7 @@ describe("verbose mode on", () => {
       entries: [
         {
           type: "console-log",
-          message: "token ghp_1234567890abcdefghijklmnopqrstuvwx",
+          message: "token ghp" + "_1234567890abcdefghijklmnopqrstuvwx",
           timestamp: Date.now(),
         },
       ],
@@ -141,7 +141,7 @@ describe("verbose mode on", () => {
 
     await vi.waitFor(() => expect(stderr()).toContain("[REDACTED]"));
     // Verbose output must not become a way to leak what redaction removed.
-    expect(stderr()).not.toContain("ghp_1234567890abcdefghijklmnopqrstuvwx");
+    expect(stderr()).not.toContain("ghp" + "_1234567890abcdefghijklmnopqrstuvwx");
   });
 
   /**

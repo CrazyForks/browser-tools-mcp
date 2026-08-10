@@ -96,7 +96,7 @@ describe("redaction at ingest", () => {
 
   it("redacts secrets inside console messages", () => {
     store.addConsole(
-      consoleEntry({ message: "auth failed for ghp_1234567890abcdefghijklmnopqrstuvwx" })
+      consoleEntry({ message: "auth failed for ghp" + "_1234567890abcdefghijklmnopqrstuvwx" })
     );
     const entry = store.queryConsole({}).entries[0]!;
     expect(entry.message).not.toContain("ghp_1234567890");

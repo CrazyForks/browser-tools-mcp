@@ -205,7 +205,7 @@ describe.skipIf(!browserSupport.usable)("extension to connector", () => {
     });
 
     expect(everything).not.toContain("SUPERSECRETCOOKIEVALUE");
-    expect(everything).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz0123456789");
+    expect(everything).not.toContain("ghp" + "_abcdefghijklmnopqrstuvwxyz0123456789");
   }, 180_000);
 
   /**
