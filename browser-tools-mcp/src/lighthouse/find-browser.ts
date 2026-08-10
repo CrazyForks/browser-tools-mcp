@@ -2,6 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { createLogger } from "../util/logger.js";
+
+const log = createLogger("browser");
+
 /**
  * Locates a browser to run Lighthouse audits in.
  *
@@ -130,8 +134,16 @@ export function findAuditBrowser(options: FindOptions = {}): FoundBrowser {
   const exists = options.exists ?? defaultExists;
 
   const explicit = env["CHROME_PATH"];
-  if (explicit && exists(explicit)) {
-    return { name: "CHROME_PATH", path: explicit, source: "CHROME_PATH" };
+  if (explicit) {
+    if (exists(explicit)) {
+      return { name: "CHROME_PATH", path: explicit, source: "CHROME_PATH" };
+    }
+    // Falling back beats failing when a working browser is installed, but doing
+    // it silently would leave someone puzzling over why their setting had no
+    // effect.
+    log.warn(
+      `CHROME_PATH points at ${explicit}, which does not exist. Looking for another browser instead.`
+    );
   }
 
   // chrome-launcher first: if real Chrome is installed, use it.

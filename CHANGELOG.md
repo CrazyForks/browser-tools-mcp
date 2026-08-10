@@ -41,6 +41,9 @@
   The error now names the browser and its path, keeps the underlying cause, and
   suggests a fix — including the ad-hoc-signing repair when the browser is a
   Playwright-downloaded Chromium, which macOS sometimes refuses to launch.
+- **A stale `CHROME_PATH` no longer costs you every audit.** If it points at a
+  browser that is not there — uninstalled since, or a path from another machine
+  — the connector now warns and looks for another browser, rather than failing.
 - **An installed Google Chrome is no longer passed over.** `chrome-launcher`
   locates browsers through Spotlight on macOS, which is unavailable in
   restricted environments, with indexing off, or for an install too recent to

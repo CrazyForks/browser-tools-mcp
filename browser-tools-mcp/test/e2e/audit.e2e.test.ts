@@ -108,15 +108,22 @@ describe.skipIf(!browserSupport.usable)("lighthouse audits against a real page",
     expect(() => assertAuditableUrl("file:///etc/passwd")).toThrow(AuditError);
   }, 60_000);
 
-  it("reports a helpful error when Chrome cannot be found", async () => {
+  /**
+   * A stale CHROME_PATH — a browser since uninstalled, a path from another
+   * machine — should not cost you every audit when a perfectly good browser is
+   * installed. The connector warns and carries on. The case where nothing at
+   * all can be found is covered in test/unit/find-browser.test.ts, which can
+   * simulate an empty machine as this suite cannot.
+   */
+  it("falls back to an installed browser when CHROME_PATH is stale", async () => {
     const previous = process.env["CHROME_PATH"];
     process.env["CHROME_PATH"] = "/nonexistent/chrome-binary";
     try {
-      await expect(
-        runLighthouseAudit({ url: fixture.url, category: "seo" })
-      ).rejects.toThrow(AuditError);
+      const report = await runLighthouseAudit({ url: fixture.url, category: "seo" });
+      expect(report.category).toBe("seo");
+      expect(report.score).toBeTypeOf("number");
     } finally {
       process.env["CHROME_PATH"] = previous;
     }
-  }, 120_000);
+  }, 180_000);
 });

@@ -58,8 +58,12 @@ async function openTab(tabId: number, url: string, options: Record<string, unkno
 
   ext.send({ type: "page", url, tabId });
 
+  // Wait for the url, not merely for the tab to exist. A tab is registered on
+  // `hello`, which arrives before the `page` frame carrying its url, so waiting
+  // on presence alone let the test read a tab whose url was still empty.
   await vi.waitFor(() => {
-    expect(connector.listTabs().some((tab) => tab.tabId === tabId)).toBe(true);
+    const tab = connector.listTabs().find((t) => t.tabId === tabId);
+    expect(tab?.url).toBe(url);
   });
   return ext;
 }
