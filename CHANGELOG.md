@@ -152,7 +152,9 @@ for the vulnerabilities this release fixes.
 - Guidance moved from static "tools" to MCP prompts: `debuggerMode`,
   `auditMode`, `nextjsSeoAudit`.
 - A console capture mode that wraps the page's console instead of attaching the
-  debugger — no "started debugging" banner, and it works in Firefox. (#115)
+  debugger — no "started debugging" banner, and no dependency on
+  `chrome.debugger`, which is what a Firefox port would need. Firefox itself is
+  unverified: the extension is built for it but has never been run there. (#115)
 - 400 tests: unit, integration, and end-to-end suites that load the real
   extension into a real Chromium and assert the whole capture path, drive the
   full MCP client -> server -> connector -> extension -> page chain, run real

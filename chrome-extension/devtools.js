@@ -526,8 +526,9 @@
       respond(message.requestId, {
         type: "screenshot-result",
         ok: false,
-        error:
-          'Screenshots require the "debugger" capture mode. Enable it in the BrowserTools panel and reload DevTools.',
+        error: api.debugger
+          ? 'Screenshots require the "debugger" capture mode. Enable it in the BrowserTools panel and reload DevTools.'
+          : "Screenshots are not available in this browser: they use the DevTools protocol, which only Chromium-based browsers expose to extensions.",
       });
       return;
     }

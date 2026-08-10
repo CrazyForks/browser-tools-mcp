@@ -214,7 +214,13 @@ it automatically.
   inlining it.
 - Console capture defaults to the DevTools protocol, which makes Chrome show a
   "started debugging this browser" banner. Switch the panel's capture mode to
-  **Wrap page console** to avoid it; that mode is also what Firefox uses.
+  **Wrap page console** to avoid it.
+- **Firefox is not verified.** The extension is written cross-browser — a
+  `browser`/`chrome` shim, `browser_specific_settings`, and a capture mode that
+  does not need `chrome.debugger` — but it has never been loaded in Firefox, and
+  nothing in the test suite covers it. Screenshots in particular go through the
+  DevTools protocol and will not work there. Treat Firefox as unsupported until
+  someone has actually run it; a report either way is welcome.
 - Audits launch a separate browser and take up to a minute. Any Chromium-based
   browser works — Chrome, Chromium, Brave, Edge, Vivaldi, Opera or Arc — and
   `--doctor` reports which one will be used. Set `CHROME_PATH` to override.
