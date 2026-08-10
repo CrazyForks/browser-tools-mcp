@@ -18,6 +18,9 @@ Proof-of-concept code is welcome and speeds up triage considerably.
 
 ## Known vulnerabilities in 1.x
 
+Published as [GHSA-xvrv-w8pg-f25f](https://github.com/AgentDeskAI/browser-tools-mcp/security/advisories/GHSA-xvrv-w8pg-f25f) (CVSS 9.8, critical). A CVE has been
+requested through GitHub and will be added here once assigned.
+
 Version 1.2.x and earlier are affected by the following. All are fixed in 2.0.0
 by design changes, not patches, which is why 2.0 is a rewrite.
 

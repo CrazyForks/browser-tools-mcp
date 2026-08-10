@@ -20,3 +20,6 @@ playwright-report/
 # Logs
 *.log
 npm-debug.log*
+
+# Never commit registry credentials
+.npmrc

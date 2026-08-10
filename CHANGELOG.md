@@ -7,7 +7,7 @@ for the vulnerabilities this release fixes.
 
 ### Security
 
-- **Fixed remote code execution.** A caller-supplied path arriving over an
+- **Fixed remote code execution** ([GHSA-xvrv-w8pg-f25f](https://github.com/AgentDeskAI/browser-tools-mcp/security/advisories/GHSA-xvrv-w8pg-f25f), CVSS 9.8). A caller-supplied path arriving over an
   unauthenticated WebSocket was interpolated into an `osascript` shell command.
   The AppleScript path is gone; screenshot names are restricted and resolved
   inside a fixed directory. (#224, #232, #233)
@@ -183,5 +183,5 @@ for the vulnerabilities this release fixes.
 
 ## 1.2.1 and earlier
 
-See the repository history. **These versions are affected by the critical
-vulnerabilities described in [SECURITY.md](SECURITY.md) and should not be used.**
+See the repository history. **These versions are affected by the critical vulnerabilities described in
+[SECURITY.md](SECURITY.md) and [GHSA-xvrv-w8pg-f25f](https://github.com/AgentDeskAI/browser-tools-mcp/security/advisories/GHSA-xvrv-w8pg-f25f), and should not be used.**
