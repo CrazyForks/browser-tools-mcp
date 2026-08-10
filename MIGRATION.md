@@ -58,7 +58,7 @@ starts as soon as DevTools is open. The panel is for settings and status.
 | `getSelectedElement`, `wipeLogs` | Unchanged |
 | `runAccessibilityAudit`, `runPerformanceAudit`, `runSEOAudit`, `runBestPracticesAudit` | Same names; reports are restructured (see below) and accept an optional `url` |
 | `runDebuggerMode`, `runAuditMode`, `runNextJSAudit` | **Removed as tools.** They returned static text and cost context on every request. They are now MCP *prompts*: `debuggerMode`, `auditMode`, `nextjsSeoAudit` |
-| — | New: `getPageInfo`, `getConnectionStatus`, `refreshBrowser`, `getBrowserStorage` |
+| — | New: `getPageInfo`, `getConnectionStatus`, `refreshBrowser`, `getBrowserStorage`, `listBrowserTabs` |
 
 Every tool now declares an MCP output schema, so results arrive as structured
 data rather than prose. Read-only tools are annotated `readOnlyHint`, which lets
@@ -113,6 +113,7 @@ small. Critical issues are never truncated.
 | Screenshot path set from the extension panel | `BROWSER_TOOLS_SCREENSHOT_DIR` or `--screenshot-dir` |
 | — | `--only` / `--exclude` to control which tools are exposed |
 | — | `--doctor` to diagnose a broken setup |
+| — | `--verbose` to watch capture as it happens |
 
 ## If something is wrong
 

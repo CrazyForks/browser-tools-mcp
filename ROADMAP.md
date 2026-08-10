@@ -6,16 +6,24 @@ _Audit date: 2026-07-30. Based on a full review of all 21 open PRs, 8 open issue
 
 ## Status: implemented on branch `revival/v2`
 
-Everything in P0-P4 below is built and tested. 346 tests pass and `npm audit`
-reports zero vulnerabilities, down from 22.
+Everything in P0-P4 below is built and tested. The full suite is **400 tests**,
+all passing, and `npm audit` reports zero vulnerabilities, down from 22. 339 of
+those need no browser; the remaining 61 launch a real one and skip with an
+explanation where none can start.
 
-Test coverage spans: pure units; the connector's HTTP and WebSocket surface
-including security regressions; MCP protocol conformance and stdout purity
-against the built binary; the shared-connector attach path over real HTTP; real
-Lighthouse audits against a real page; the injected console-capture mode; the
-DevTools panel UI loaded from the real extension origin; a real Chromium with
-the real extension loaded; and the full
+Coverage spans: pure units; the connector's HTTP and WebSocket surface including
+security regressions; MCP protocol conformance and stdout purity against the
+built binary; the shared-connector attach path over real HTTP; real Lighthouse
+audits against a real page; the injected console-capture mode; the DevTools
+panel loaded from the real extension origin; a real Chromium with the real
+extension loaded; and the full
 MCP client -> server -> connector -> extension -> page chain.
+
+Five bugs were found during the manual pass that the suite missed — a credential
+leak, an over-redaction regression, audits broken without Chrome installed,
+Chrome detection preferring a stale cached build, and a tab-registry race. Each
+has a regression test now. That hit rate is worth remembering: hands-on use
+found more than the tests did.
 
 Known gaps, in priority order:
 
@@ -25,13 +33,11 @@ Known gaps, in priority order:
   locally-spawned stdio server.
 - Screenshots accumulate with no retention policy (audit reports are capped at
   20); audits have no concurrency limit.
-
-Still unverified by automation, and worth a manual pass: the extension running
-under Firefox, Windows and WSL, and installation via `npx` from a published
-tarball. The panel is covered against a stubbed devtools bridge rather than
-inside a live DevTools window, since Chrome's devtools frontend is not
-automatable without depending on undocumented internals; the stub's shape is
-pinned to devtools.js by a contract test.
+- **Firefox is claimed but unverified.** The extension is built cross-browser and
+  the capture mode it would use is tested, but it has never been loaded in
+  Firefox. Either verify it or soften the claim.
+- Windows and WSL are covered only by unit tests over path conversion. The CI
+  matrix includes both and will exercise them once this is pushed.
 
 See [CHANGELOG.md](CHANGELOG.md) for what shipped, [MIGRATION.md](MIGRATION.md)
 for the upgrade path, [SECURITY.md](SECURITY.md) for the vulnerability writeups,

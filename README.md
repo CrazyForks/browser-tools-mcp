@@ -192,6 +192,9 @@ Flags, or the matching `BROWSER_TOOLS_*` environment variables:
 | `--exclude <a,b>` | Hide these tools |
 | `--doctor` | Check the setup and exit |
 | `--verbose` | Print each captured entry as it arrives |
+| `--host <addr>` | Loopback address to bind (default `127.0.0.1`) |
+| `--connect <url>` | Attach to a connector already running elsewhere |
+| `--token <t>` | Auth token to use with `--connect` |
 | `--no-redact` | Disable credential scrubbing (not recommended) |
 
 To share one browser session between several MCP clients, start the connector

@@ -14,4 +14,11 @@ npx @agentdeskai/browser-tools-server
 Every `browser-tools-mcp` process started afterwards attaches to it
 automatically instead of starting its own.
 
+Add `--verbose` to watch capture as it happens, which is the quickest way to
+confirm a fresh install is working:
+
+```bash
+npx @agentdeskai/browser-tools-server --verbose
+```
+
 Full documentation: https://github.com/AgentDeskAI/browser-tools-mcp
