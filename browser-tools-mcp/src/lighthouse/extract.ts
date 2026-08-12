@@ -72,7 +72,8 @@ function extractDetails(
 export function extractAuditReport(
   lhr: LighthouseResultLike,
   url: string,
-  category: string
+  category: string,
+  device: string = "desktop"
 ): AuditReport {
   const categoryData = lhr.categories?.[category];
   const audits = lhr.audits ?? {};
@@ -153,7 +154,7 @@ export function extractAuditReport(
     metadata: {
       url: url || lhr.finalDisplayedUrl || lhr.requestedUrl || "",
       timestamp: lhr.fetchTime ?? new Date().toISOString(),
-      device: "desktop",
+      device,
       lighthouseVersion: lhr.lighthouseVersion ?? "unknown",
     },
     score:

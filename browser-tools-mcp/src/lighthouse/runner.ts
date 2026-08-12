@@ -25,6 +25,69 @@ export class AuditError extends Error {
   }
 }
 
+/** Screen, throttling and user agent have to describe the same device. */
+const DEVICE_PROFILES = {
+  desktop: {
+    screenEmulation: { mobile: false, width: 1350, height: 940, deviceScaleFactor: 1, disabled: false },
+    throttlingPreset: "desktopDense4G",
+  },
+  mobile: {
+    screenEmulation: { mobile: true, width: 412, height: 823, deviceScaleFactor: 1.75, disabled: false },
+    throttlingPreset: "mobileSlow4G",
+  },
+} as const;
+
+/**
+ * Lighthouse's own presets, so an audit and any future emulation agree on what
+ * "mobile" means rather than each carrying its own numbers.
+ *
+ * Loaded on demand and memoised. A static import costs ~30ms at startup,
+ * because the connector imports this module eagerly and only audits ever need
+ * these values — and answering `initialize` promptly is the reason the second
+ * process went away.
+ */
+let devicePresets: Promise<{ throttling: any; userAgents: any }> | undefined;
+
+function loadDevicePresets() {
+  devicePresets ??= import("lighthouse/core/config/constants.js").then((m) => {
+    const c = (m as any).default ?? m;
+    return { throttling: c.throttling, userAgents: c.userAgents };
+  });
+  return devicePresets;
+}
+
+export interface LighthouseFlagOptions {
+  category: AuditCategory;
+  device: "desktop" | "mobile";
+  port: number;
+  timeoutMs: number;
+}
+
+/**
+ * Builds the flags for a run.
+ *
+ * formFactor and screenEmulation were set but throttling and emulatedUserAgent
+ * were not, so a desktop audit ran a desktop viewport under Lighthouse's
+ * default mobile Slow-4G throttling while identifying itself as a phone —
+ * three settings disagreeing about the device, and a score shaped by whichever
+ * one mattered most.
+ */
+export async function buildLighthouseFlags(options: LighthouseFlagOptions) {
+  const profile = DEVICE_PROFILES[options.device];
+  const { throttling, userAgents } = await loadDevicePresets();
+  return {
+    port: options.port,
+    output: "json" as const,
+    logLevel: "error" as const,
+    onlyCategories: [options.category],
+    formFactor: options.device,
+    screenEmulation: profile.screenEmulation,
+    throttling: throttling[profile.throttlingPreset],
+    emulatedUserAgent: userAgents[options.device],
+    maxWaitForLoad: options.timeoutMs,
+  };
+}
+
 /** Only real web pages can be audited; anything else is a configuration mistake. */
 export function assertAuditableUrl(url: string): URL {
   let parsed: URL;
@@ -86,18 +149,7 @@ export async function runLighthouseAudit(
       chromePath: browser.path,
     })) as unknown as { port: number; kill: () => Promise<void> };
 
-    const flags = {
-      port: chrome.port,
-      output: "json" as const,
-      logLevel: "error" as const,
-      onlyCategories: [category],
-      formFactor: device,
-      screenEmulation:
-        device === "desktop"
-          ? { mobile: false, width: 1350, height: 940, deviceScaleFactor: 1, disabled: false }
-          : { mobile: true, width: 412, height: 823, deviceScaleFactor: 1.75, disabled: false },
-      maxWaitForLoad: timeoutMs,
-    };
+    const flags = await buildLighthouseFlags({ category, device, port: chrome.port, timeoutMs });
 
     const result = (await withTimeout(
       lighthouse(url, flags),
@@ -109,7 +161,7 @@ export async function runLighthouseAudit(
     if (!lhr) throw new AuditError("Lighthouse returned no result");
 
     hooks.onRawResult?.(lhr);
-    return extractAuditReport(lhr, url, category);
+    return extractAuditReport(lhr, url, category, device);
   } catch (error) {
     if (error instanceof AuditError) throw error;
     // Already a clear, actionable explanation; do not bury it.

@@ -1,5 +1,43 @@
 # Changelog
 
+## 2.0.2
+
+Five defects, all found by writing the 2.1 capability specifications rather
+than by anything failing. Four were invisible in normal use, which is why they
+survived the rewrite.
+
+- **HAR exports reported every request as starting when it finished.** The
+  capture stamps `timestamp` at `onRequestFinished`, and the HAR builder used
+  that for `startedDateTime`, so a 2-second request appeared instantaneous at
+  the wrong moment. Requests now carry `startedAt`, taken from the DevTools
+  entry's own start time, and fall back to finish-minus-duration. Anything
+  reading a HAR — including Chrome's Network panel — was being misled.
+- **Reads came back in arrival order rather than event order.** The store keeps
+  entries in the order the connector received them, and telemetry is flushed in
+  100ms batches per tab and buffered up to 1000 entries while the socket is
+  down, so arrival and event order genuinely diverge. Queries slice the tail as
+  "the newest" — which could return the wrong entries entirely, and interleave
+  two tabs wrongly on an `allTabs` read. Reads are now ordered by event time.
+- **`logLimit` defaulted to 50 entries per category per tab**, which is less
+  than a single real page load. Anything reading back over a session was
+  silently clipped. The default is now 500; the range is unchanged.
+- **The selected element was truncated in the page but never scrubbed there.**
+  Every console and network value goes through `scrubAndTruncate`, which scrubs
+  first; the selected element was sliced inside the page and sent as-is. The
+  server still scrubbed on arrival, so nothing unredacted reached the model,
+  but it crossed the socket unscrubbed, and truncating first is precisely the
+  ordering that hid a token from the pattern meant to catch it — the bug 2.0.0
+  fixed everywhere else. Now sanitised in the browser, scrub before truncate.
+- **Audits ran one device and reported another.** `formFactor` and
+  `screenEmulation` were set but `throttling` and `emulatedUserAgent` were not,
+  so a desktop audit ran a desktop viewport under Lighthouse's default mobile
+  Slow-4G throttling while identifying as a phone. `metadata.device` was
+  hardcoded to `"desktop"` regardless. Flags now come from Lighthouse's own
+  presets so all three agree, and the report names the device it simulated.
+
+Lighthouse's device presets are loaded on demand: importing them eagerly cost
+about 30ms at startup, on the path that answers `initialize`.
+
 ## 2.0.1
 
 Metadata only — no code changes. `npx @agentdeskai/browser-tools-mcp@latest`

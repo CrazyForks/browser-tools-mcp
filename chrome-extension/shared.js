@@ -242,6 +242,41 @@ function scrubSecrets(value) {
 }
 
 /** Scrub first, then shorten — the order is what makes detection work. */
+/**
+ * Scrubs every string on a selected-element payload, before truncating it.
+ *
+ * The element took a different path to every other capture: it was sliced
+ * inside the page and sent as-is, so nothing scrubbed it in the browser and the
+ * slicing happened first — the ordering that hid a token from the pattern that
+ * would have caught it. Applied here so the element crosses the socket under
+ * the same rule as console and network entries.
+ */
+function sanitiseSelectedElement(element, limit) {
+  if (!element || typeof element !== "object") return element;
+
+  var out = {};
+  for (var key in element) {
+    if (!Object.prototype.hasOwnProperty.call(element, key)) continue;
+    var value = element[key];
+
+    if (typeof value === "string") {
+      out[key] = scrubAndTruncate(value, limit);
+    } else if (value && typeof value === "object" && !Array.isArray(value)) {
+      var nested = {};
+      for (var inner in value) {
+        if (!Object.prototype.hasOwnProperty.call(value, inner)) continue;
+        var innerValue = value[inner];
+        nested[inner] =
+          typeof innerValue === "string" ? scrubAndTruncate(innerValue, limit) : innerValue;
+      }
+      out[key] = nested;
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
 function scrubAndTruncate(value, limit) {
   if (typeof value !== "string") return value;
   const scrubbed = scrubSecrets(value);

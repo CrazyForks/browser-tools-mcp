@@ -27,7 +27,9 @@ export interface CaptureSettings {
 }
 
 export const LIMITS = {
-  logLimit: { min: 1, max: 5_000, default: 50 },
+  // 50 was less than a single real page load, so anything reading back over
+  // a session was silently clipped.
+  logLimit: { min: 1, max: 5_000, default: 500 },
   queryLimit: { min: 1_000, max: 500_000, default: 30_000 },
   stringSizeLimit: { min: 100, max: 100_000, default: 500 },
   maxLogSize: { min: 1_000, max: 1_000_000, default: 20_000 },

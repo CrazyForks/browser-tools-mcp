@@ -280,3 +280,21 @@ describe("extractAuditReport with degenerate input", () => {
     expect(report.metadata.url).toBe("https://example.com");
   });
 });
+
+/**
+ * The report must name the device it actually simulated.
+ *
+ * metadata.device was hardcoded to "desktop" regardless of what the audit ran
+ * as, so a mobile audit reported desktop.
+ */
+describe("device metadata", () => {
+  it("reports the device it was told the audit used", () => {
+    const report = extractAuditReport(makeLhr(), "https://example.com", "performance", "mobile");
+    expect(report.metadata.device).toBe("mobile");
+  });
+
+  it("still defaults to desktop when nothing is passed", () => {
+    const report = extractAuditReport(makeLhr(), "https://example.com", "performance");
+    expect(report.metadata.device).toBe("desktop");
+  });
+});

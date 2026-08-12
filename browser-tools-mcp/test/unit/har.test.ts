@@ -29,7 +29,8 @@ describe("buildHar", () => {
     expect(first.request.method).toBe("POST");
     expect(first.request.url).toBe("https://api.example.com/users?page=2");
     expect(first.response.status).toBe(503);
-    expect(first.startedDateTime).toBe("2026-08-04T10:00:00.000Z");
+    // timestamp is the finish; the fixture ran for 123ms, so it started before it.
+    expect(first.startedDateTime).toBe("2026-08-04T09:59:59.877Z");
   });
 
   it("splits the query string out, as the format expects", () => {
@@ -112,5 +113,37 @@ describe("buildHar", () => {
   it("handles an empty list", () => {
     const har = buildHar([]) as any;
     expect(har.log.entries).toEqual([]);
+  });
+});
+
+/**
+ * A HAR entry's startedDateTime must be when the request started.
+ *
+ * The capture site stamps `timestamp` at onRequestFinished, so using it here
+ * reported every request as having started at the moment it finished — visibly
+ * wrong to anything that reads a HAR, including Chrome's own Network panel.
+ */
+describe("startedDateTime is the start, not the finish", () => {
+  it("uses startedAt when the capture provided it", () => {
+    const started = Date.parse("2026-08-04T10:00:00.000Z");
+    const har = buildHar([
+      entry({ startedAt: started, timestamp: started + 2200, durationMs: 2200 }),
+    ]) as any;
+
+    expect(har.log.entries[0].startedDateTime).toBe("2026-08-04T10:00:00.000Z");
+  });
+
+  it("falls back to finish minus duration when startedAt is absent", () => {
+    const finished = Date.parse("2026-08-04T10:00:02.200Z");
+    const har = buildHar([entry({ timestamp: finished, durationMs: 2200 })]) as any;
+
+    expect(har.log.entries[0].startedDateTime).toBe("2026-08-04T10:00:00.000Z");
+  });
+
+  it("does not shift the timestamp when no duration is known", () => {
+    const finished = Date.parse("2026-08-04T10:00:02.200Z");
+    const har = buildHar([entry({ timestamp: finished, durationMs: undefined })]) as any;
+
+    expect(har.log.entries[0].startedDateTime).toBe("2026-08-04T10:00:02.200Z");
   });
 });

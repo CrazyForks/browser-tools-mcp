@@ -20,14 +20,19 @@ const sharedJsPath = path.resolve(
 );
 
 let scrubAndTruncate: (value: string, limit: number) => string;
+let sanitiseSelectedElement: (element: unknown, limit: number) => unknown;
 let scrubSecrets: (value: string) => string;
 
 beforeAll(() => {
   const source = fs.readFileSync(sharedJsPath, "utf8");
   const extract = new Function(
-    `${source}\nreturn { scrubAndTruncate, scrubSecrets };`
-  ) as () => { scrubAndTruncate: typeof scrubAndTruncate; scrubSecrets: typeof scrubSecrets };
-  ({ scrubAndTruncate, scrubSecrets } = extract());
+    `${source}\nreturn { scrubAndTruncate, scrubSecrets, sanitiseSelectedElement };`
+  ) as () => {
+    scrubAndTruncate: typeof scrubAndTruncate;
+    scrubSecrets: typeof scrubSecrets;
+    sanitiseSelectedElement: typeof sanitiseSelectedElement;
+  };
+  ({ scrubAndTruncate, scrubSecrets, sanitiseSelectedElement } = extract());
 });
 
 describe("scrubbing happens before truncation", () => {
@@ -123,5 +128,47 @@ describe("base64 JSON that is not a token", () => {
     expect(redactSecretsInString(image)).toBe(image);
     expect(scrubSecrets(token)).toContain("[REDACTED]");
     expect(redactSecretsInString(token)).toContain("[REDACTED]");
+  });
+});
+
+/**
+ * The selected element took a different path to every other capture.
+ *
+ * onSelectionChanged sliced textContent and innerHTML inside the page and sent
+ * the result straight out — no scrubbing in the browser at all, and the slicing
+ * happened first. That is the exact ordering that caused the original leak: a
+ * token cut mid-way no longer matches the pattern that would have caught it.
+ */
+describe("selected element sanitisation", () => {
+  const jwt =
+    "eyJhbGciOiJSUzI1NiIsImNhdCI6ImNsX0I3ZDRQZDRQZDRQIiwia2lkIjoiaW5zXzJa" +
+    "X".repeat(600) +
+    ".eyJzdWIiOiJ1c2VyIn0.SIGNATUREabcdef123456";
+
+  it("scrubs a token in textContent that is longer than the limit", () => {
+    const out = sanitiseSelectedElement({ textContent: `token ${jwt}` }, 500) as any;
+    expect(out.textContent).not.toContain("eyJhbGciOiJSUzI1NiIsImNhdCI6");
+    expect(out.textContent).toContain("[REDACTED]");
+  });
+
+  it("scrubs attribute values, not just text", () => {
+    const out = sanitiseSelectedElement(
+      { attributes: { "data-session": "sess_3HWEvAAPLW3pElwMd0oolLs5aF7", id: "save" } },
+      500
+    ) as any;
+    expect(out.attributes["data-session"]).toContain("[REDACTED]");
+    expect(out.attributes.id).toBe("save");
+  });
+
+  it("scrubs innerHTML before truncating it", () => {
+    const out = sanitiseSelectedElement({ innerHTML: `<div>${jwt}</div>` }, 500) as any;
+    expect(out.innerHTML).not.toContain("eyJhbGciOiJSUzI1NiIsImNhdCI6");
+  });
+
+  it("leaves non-string fields alone", () => {
+    const rect = { x: 1, y: 2, width: 3, height: 4 };
+    const out = sanitiseSelectedElement({ tagName: "BUTTON", boundingRect: rect }, 500) as any;
+    expect(out.tagName).toBe("BUTTON");
+    expect(out.boundingRect).toEqual(rect);
   });
 });

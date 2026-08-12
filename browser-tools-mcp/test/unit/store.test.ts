@@ -269,3 +269,46 @@ describe("page state and wipe", () => {
     expect(store.getSelectedElement()).toBeNull();
   });
 });
+
+/**
+ * Reads must come back in event order, not arrival order.
+ *
+ * Entries are flushed from the extension in 100ms batches, per tab, and up to
+ * 1000 are buffered while the socket is down. Arrival order therefore diverges
+ * from event order, and #paginate slices the tail as "newest" without sorting.
+ */
+describe("ordering", () => {
+  it("returns the newest by timestamp when arrival order disagrees", () => {
+    store.addConsole(consoleEntry({ message: "newest", timestamp: 3000 }));
+    store.addConsole(consoleEntry({ message: "oldest", timestamp: 1000 }));
+    store.addConsole(consoleEntry({ message: "middle", timestamp: 2000 }));
+
+    const result = store.queryConsole({ limit: 2 });
+    const messages = result.entries.map((e) => e.message);
+
+    expect(messages).toContain("newest");
+    expect(messages).toContain("middle");
+    expect(messages).not.toContain("oldest");
+  });
+
+  it("orders a merged multi-tab read by event time", () => {
+    // Arrival order deliberately disagrees with event order, which is what a
+    // batched flush from two tabs actually looks like.
+    store.addConsole(consoleEntry({ message: "tab2 third", timestamp: 3000 }), 2);
+    store.addConsole(consoleEntry({ message: "tab1 second", timestamp: 2000 }), 1);
+    store.addConsole(consoleEntry({ message: "tab2 first", timestamp: 1000 }), 2);
+
+    const entries = store.queryConsole({}).entries;
+    const times = entries.map((e) => e.timestamp);
+
+    expect([...times].sort((a, b) => a - b)).toEqual(times);
+  });
+
+  it("orders network reads by timestamp too", () => {
+    store.addNetwork(networkEntry({ url: "https://x/late", timestamp: 3000 }));
+    store.addNetwork(networkEntry({ url: "https://x/early", timestamp: 1000 }));
+
+    const urls = store.queryNetwork({ limit: 1 }).entries.map((e) => e.url);
+    expect(urls).toEqual(["https://x/late"]);
+  });
+});

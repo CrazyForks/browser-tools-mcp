@@ -78,3 +78,14 @@ describe("mergeSettings", () => {
     expect(DEFAULT_SETTINGS.showResponseHeaders).toBe(false);
   });
 });
+
+/**
+ * 50 entries per category per tab is less than one real page load, which
+ * silently clipped anything that reads back over a session.
+ */
+describe("retention default", () => {
+  it("retains enough of a page load to be useful", () => {
+    expect(LIMITS.logLimit.default).toBeGreaterThanOrEqual(500);
+    expect(LIMITS.logLimit.default).toBeLessThanOrEqual(LIMITS.logLimit.max);
+  });
+});

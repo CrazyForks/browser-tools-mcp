@@ -41,8 +41,24 @@ function mimeTypeOf(headers: Record<string, string> | undefined): string {
   return "";
 }
 
-function startedDateTime(timestamp: number): string {
-  const ms = Number.isFinite(timestamp) && timestamp > 0 ? timestamp : Date.now();
+/**
+ * HAR wants when the request started; the capture stamps when it finished.
+ *
+ * `startedAt` is recorded at capture where the DevTools API supplies it.
+ * Falling back to finish-minus-duration is right for everything that reports a
+ * duration, and an entry with neither can only report what it has.
+ */
+function startedDateTime(entry: NetworkEntry): string {
+  const finished =
+    Number.isFinite(entry.timestamp) && entry.timestamp > 0 ? entry.timestamp : Date.now();
+
+  let ms = finished;
+  if (Number.isFinite(entry.startedAt) && (entry.startedAt as number) > 0) {
+    ms = entry.startedAt as number;
+  } else if (Number.isFinite(entry.durationMs) && (entry.durationMs as number) > 0) {
+    ms = finished - (entry.durationMs as number);
+  }
+
   return new Date(ms).toISOString();
 }
 
@@ -74,7 +90,7 @@ export function buildHar(entries: readonly NetworkEntry[]): Record<string, unkno
         }
 
         return {
-          startedDateTime: startedDateTime(entry.timestamp),
+          startedDateTime: startedDateTime(entry),
           time,
           request,
           response: {

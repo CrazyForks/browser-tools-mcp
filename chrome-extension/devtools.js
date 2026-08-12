@@ -385,6 +385,14 @@
 
   // --- network capture -----------------------------------------------------
 
+  /** The HAR entry carries the real start time; fall back to finish minus duration. */
+  function startedAtOf(request) {
+    var parsed = Date.parse(request && request.startedDateTime);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    var duration = Math.round((request && request.time) || 0);
+    return duration > 0 ? Date.now() - duration : undefined;
+  }
+
   function onRequestFinished(request) {
     if (!settings.captureNetwork) return;
 
@@ -399,6 +407,8 @@
       method: req.method || "GET",
       status: res.status || 0,
       timestamp: Date.now(),
+      // HAR needs the start; the finish is what we happen to be standing at.
+      startedAt: startedAtOf(request),
       durationMs: Math.round(request.time || 0),
       requestHeaders: headersToObject(req.headers),
       responseHeaders: headersToObject(res.headers),
@@ -445,6 +455,16 @@
     });
   }
 
+  /**
+   * A generous in-page cap, well above stringSizeLimit.
+   *
+   * It exists to bound what crosses the extension boundary, not to redact: the
+   * real scrub and truncate happen here, in that order, once the value is out
+   * of the page. Cutting to the final limit in the page is what let a token be
+   * sliced mid-way and stop matching.
+   */
+  const IN_PAGE_ELEMENT_CAP = 50_000;
+
   function onSelectionChanged() {
     api.devtools.inspectedWindow.eval(
       `(function () {
@@ -460,13 +480,15 @@
           id: el.id || undefined,
           className: el.className || undefined,
           attributes: attrs,
-          textContent: (el.textContent || "").slice(0, ${Number(settings.stringSizeLimit) || 500}),
-          innerHTML: (el.innerHTML || "").slice(0, ${Number(settings.stringSizeLimit) || 500}),
+          textContent: (el.textContent || "").slice(0, ${IN_PAGE_ELEMENT_CAP}),
+          innerHTML: (el.innerHTML || "").slice(0, ${IN_PAGE_ELEMENT_CAP}),
           boundingRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
         };
       })()`,
       (element, exception) => {
-        if (!evalFailed(exception) && element) send({ type: "selected-element", element });
+        if (evalFailed(exception) || !element) return;
+        const limit = Number(settings.stringSizeLimit) || 500;
+        send({ type: "selected-element", element: sanitiseSelectedElement(element, limit) });
       }
     );
   }

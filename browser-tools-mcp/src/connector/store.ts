@@ -24,7 +24,10 @@ export interface NetworkEntry {
   url: string;
   method: string;
   status: number;
+  /** When the request completed. */
   timestamp: number;
+  /** When the request started, if the capture could determine it. */
+  startedAt?: number;
   tabId?: TabId | null;
   durationMs?: number;
   error?: string;
@@ -81,6 +84,18 @@ const ERROR_LEVELS = new Set(["error", "assert", "critical"]);
 
 /** Entries with no tab attribution share one bucket. */
 const UNATTRIBUTED = "__no-tab__";
+
+/**
+ * Oldest first, so #paginate's tail slice is genuinely the newest.
+ *
+ * Entries arrive in flush order, not event order: the extension batches every
+ * 100ms per tab and buffers up to 1000 while the socket is down, so a merged
+ * read could otherwise interleave two tabs wrongly and call the wrong end
+ * "newest". Sorting a copy keeps insertion order intact for eviction.
+ */
+function byTime<T extends { timestamp: number }>(entries: readonly T[]): readonly T[] {
+  return [...entries].sort((a, b) => a.timestamp - b.timestamp);
+}
 
 function tabKey(tabId: TabId | null | undefined): string {
   return tabId === null || tabId === undefined ? UNATTRIBUTED : String(tabId);
@@ -255,7 +270,7 @@ export class TelemetryStore {
       matched = matched.filter((e) => matchesAny([e.message], query.keywords!));
     }
 
-    return this.#paginate(matched, query.limit, query.offset);
+    return this.#paginate(byTime(matched), query.limit, query.offset);
   }
 
   queryNetwork(query: NetworkQuery): QueryResult<NetworkEntry> {
@@ -277,7 +292,7 @@ export class TelemetryStore {
       );
     }
 
-    const result = this.#paginate(matched, query.limit, query.offset);
+    const result = this.#paginate(byTime(matched), query.limit, query.offset);
     result.entries = result.entries.map((entry) => this.#applyHeaderVisibility(entry));
     return result;
   }
